@@ -104,6 +104,17 @@ func main() {
 					track := search.Track(i)
 					track.Wait()
 					println("track", i, track.Name())
+
+					// TODO ref counting issue?
+					// for j := 0; j < track.Artists(); j++ {
+					// 	artist := track.Artist(i)
+					// 	artist.Wait()
+					// 	println("artist", j, artist.Name())
+					// }
+
+					album := track.Album()
+					album.Wait()
+					println("album", album.Name())
 				}
 			}()
 
