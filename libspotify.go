@@ -285,11 +285,11 @@ func (s *Session) Login(c Credentials, remember bool) error {
 	return spError(rc)
 }
 
-// ReLogin logs the remembered user in if the last user which logged in, logged
+// Relogin logs the remembered user in if the last user which logged in, logged
 // in with the remember flag set to true.
 //
 // If no credentials are stored, this will return ErrNoCredentials.
-func (s *Session) ReLogin() error {
+func (s *Session) Relogin() error {
 	return spError(C.sp_session_relogin(s.session))
 }
 
@@ -372,272 +372,6 @@ type SearchOptions struct {
 
 	// Type is the search type. Defaults to normal searching.
 	Type SearchType
-}
-
-type search struct {
-	session   *Session
-	sp_search *C.sp_search
-	wg        sync.WaitGroup
-}
-
-func (s *search) init(session *Session, sp_search *C.sp_search) {
-	s.session = session
-	s.sp_search = sp_search
-	s.wg.Add(1)
-	runtime.SetFinalizer(s, (*search).finalize)
-}
-
-func (s *search) finalize() {
-	if s.sp_search != nil {
-		C.sp_search_release(s.sp_search)
-		s.sp_search = nil
-	}
-}
-
-func (s *search) Wait() error {
-	s.wg.Wait()
-	return s.Error()
-}
-
-func (s *search) cbComplete() {
-	s.wg.Done()
-}
-
-func (s *search) Error() error {
-	return spError(C.sp_search_error(s.sp_search))
-}
-
-func (s *search) Query() string {
-	return C.GoString(C.sp_search_query(s.sp_search))
-}
-
-func (s *search) DidYouMean() string {
-	return C.GoString(C.sp_search_did_you_mean(s.sp_search))
-}
-
-func (s *search) Tracks() int {
-	return int(C.sp_search_num_tracks(s.sp_search))
-}
-
-func (s *search) TotalTracks() int {
-	return int(C.sp_search_total_tracks(s.sp_search))
-}
-
-type Track struct {
-	session  *Session
-	sp_track *C.sp_track
-	wg       sync.WaitGroup
-}
-
-func newTrack(s *Session, t *C.sp_track) *Track {
-	track := &Track{
-		session:  s,
-		sp_track: t,
-	}
-	runtime.SetFinalizer(track, (*Track).finalize)
-	return track
-}
-
-func (t *Track) finalize() {
-	if t.sp_track != nil {
-		C.sp_track_release(t.sp_track)
-		t.sp_track = nil
-	}
-}
-
-// Error returns an error associated with a track.
-func (t *Track) Error() error {
-	return spError(C.sp_track_error(t.sp_track))
-}
-
-func (t *Track) OfflineStatus() TrackOfflineStatus {
-	status := C.sp_track_offline_get_status(t.sp_track)
-	return TrackOfflineStatus(status)
-}
-
-// Availability returns the track availability.
-func (t *Track) Availability() TrackAvailability {
-	avail := C.sp_track_get_availability(
-		t.session.session,
-		t.sp_track,
-	)
-	return TrackAvailability(avail)
-}
-
-// IsLocal returns true if the track is a local file.
-func (t *Track) IsLocal() bool {
-	local := C.sp_track_is_local(
-		t.session.session,
-		t.sp_track,
-	)
-	return local == 1
-}
-
-// IsAutoLinked returns true if the track is auto-linked to another track.
-func (t *Track) IsAutoLinked() bool {
-	linked := C.sp_track_is_autolinked(
-		t.session.session,
-		t.sp_track,
-	)
-	return linked == 1
-}
-
-func (t *Track) PlayableTrack() *Track {
-	sp_track := C.sp_track_get_playable(
-		t.session.session,
-		t.sp_track,
-	)
-	return newTrack(t.session, sp_track)
-}
-
-// IsPlaceholder returns true if the track is a
-// placeholder. Placeholder tracks are used to store
-// other objects than tracks in the playlist. Currently
-// this is used in the inbox to store artists, albums and
-// playlists.
-//
-// TODO Use sp_link_create_from_track() to get a link object
-// that points to the real object this "track" points to.
-func (t *Track) IsPlaceholder() bool {
-	placeholder := C.sp_track_is_placeholder(
-		t.sp_track,
-	)
-	return placeholder == 1
-}
-
-// IsStarred returns true if the track is starred by the
-// currently logged in user.
-func (t *Track) IsStarred() bool {
-	starred := C.sp_track_is_starred(
-		t.session.session,
-		t.sp_track,
-	)
-	return starred == 1
-}
-
-// TODO sp_track_set_starred
-
-func (t *Track) Artists() int {
-	return int(C.sp_track_num_artists(t.sp_track))
-}
-
-// TODO sp_track_artist
-// TODO sp_track_album
-
-// Name returns the track name.
-func (t *Track) Name() string {
-	return C.GoString(C.sp_track_name(t.sp_track))
-}
-
-// Duration returns the length of the current track.
-func (t *Track) Duration() time.Duration {
-	ms := C.sp_track_duration(t.sp_track)
-	return time.Duration(ms) * time.Millisecond
-}
-
-// Popularity is in the range [0, 100].
-type Popularity int
-
-// Popularity returns the popularity for the track.
-func (t *Track) Popularity() Popularity {
-	p := C.sp_track_popularity(t.sp_track)
-	return Popularity(p)
-}
-
-// Disc returns the disc number for the track.
-func (t *Track) Disc() int {
-	return int(C.sp_track_disc(t.sp_track))
-}
-
-// Position returns the position of a track on its disc.
-// It starts at 1 (relative the corresponding disc).
-//
-// This function returns valid data only for tracks
-// appearing in a browse artist or browse album result
-// (otherwise returns 0).
-func (t *Track) Index() int {
-	return int(C.sp_track_index(t.sp_track))
-}
-
-// TODO sp_localtrack_create
-
-func (t *Track) Wait() {
-	// TODO make this more elegant and based on callback
-	for {
-		if C.sp_track_is_loaded(t.sp_track) == 1 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-type TrackAvailability C.sp_track_availability
-
-const (
-	// Track is not available
-	TrackAvailabilityUnavailable = TrackAvailability(C.SP_TRACK_AVAILABILITY_UNAVAILABLE)
-
-	// Track is available and can be played
-	TrackAvailabilityAvailable = TrackAvailability(C.SP_TRACK_AVAILABILITY_AVAILABLE)
-
-	// Track can not be streamed using this account
-	TrackAvailabilityNotStreamable = TrackAvailability(C.SP_TRACK_AVAILABILITY_NOT_STREAMABLE)
-
-	// Track not available on artist's request
-	TrackAvailabilityBannedByArtist = TrackAvailability(C.SP_TRACK_AVAILABILITY_BANNED_BY_ARTIST)
-)
-
-type TrackOfflineStatus C.sp_track_offline_status
-
-const (
-	// Not marked for offline
-	TrackOfflineNo = Error(C.SP_TRACK_OFFLINE_NO)
-	// Waiting for download
-	TrackOfflineWaiting = Error(C.SP_TRACK_OFFLINE_WAITING)
-	// Currently downloading
-	TrackOfflineDownloading = Error(C.SP_TRACK_OFFLINE_DOWNLOADING)
-	// Downloaded OK and can be played
-	TrackOfflineDone = Error(C.SP_TRACK_OFFLINE_DONE)
-	// Error during download
-	TrackOfflineError = Error(C.SP_TRACK_OFFLINE_ERROR)
-	// Downloaded OK but not playable due to expiery
-	TrackOfflineDoneExpired = Error(C.SP_TRACK_OFFLINE_DONE_EXPIRED)
-	// Waiting because device have reached max number of allowed tracks
-	TrackOfflineLimitExceeded = Error(C.SP_TRACK_OFFLINE_LIMIT_EXCEEDED)
-	// Downloaded OK and available but scheduled for re-download
-	TrackOfflineDoneResync = Error(C.SP_TRACK_OFFLINE_DONE_RESYNC)
-)
-
-func (s *search) Track(n int) *Track {
-	if n < 0 || n >= s.Tracks() {
-		panic("spotify: search track out of range")
-	}
-	sp_track := C.sp_search_track(s.sp_search, C.int(n))
-	return newTrack(s.session, sp_track)
-}
-
-func (s *search) Albums() int {
-	return int(C.sp_search_num_albums(s.sp_search))
-}
-
-func (s *search) TotalAlbums() int {
-	return int(C.sp_search_total_albums(s.sp_search))
-}
-
-func (s *search) Artists() int {
-	return int(C.sp_search_num_artists(s.sp_search))
-}
-
-func (s *search) TotalArtists() int {
-	return int(C.sp_search_total_artists(s.sp_search))
-}
-
-func (s *search) Playlists() int {
-	return int(C.sp_search_num_playlists(s.sp_search))
-}
-
-func (s *search) TotalPlaylists() int {
-	return int(C.sp_search_total_playlists(s.sp_search))
 }
 
 // Search searches Spotify for track, album, artist and / or playlists.
@@ -793,4 +527,346 @@ func go_connectionstate_updated(spSession unsafe.Pointer) {
 func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
 	s := (*search)(userdata)
 	s.cbComplete()
+}
+
+type search struct {
+	session   *Session
+	sp_search *C.sp_search
+	wg        sync.WaitGroup
+}
+
+func (s *search) init(session *Session, sp_search *C.sp_search) {
+	s.session = session
+	s.sp_search = sp_search
+	s.wg.Add(1)
+	runtime.SetFinalizer(s, (*search).finalize)
+}
+
+func (s *search) finalize() {
+	if s.sp_search != nil {
+		C.sp_search_release(s.sp_search)
+		s.sp_search = nil
+	}
+}
+
+func (s *search) Wait() error {
+	s.wg.Wait()
+	return s.Error()
+}
+
+func (s *search) cbComplete() {
+	s.wg.Done()
+}
+
+func (s *search) Error() error {
+	return spError(C.sp_search_error(s.sp_search))
+}
+
+func (s *search) Query() string {
+	return C.GoString(C.sp_search_query(s.sp_search))
+}
+
+func (s *search) DidYouMean() string {
+	return C.GoString(C.sp_search_did_you_mean(s.sp_search))
+}
+
+func (s *search) Tracks() int {
+	return int(C.sp_search_num_tracks(s.sp_search))
+}
+
+func (s *search) TotalTracks() int {
+	return int(C.sp_search_total_tracks(s.sp_search))
+}
+
+func (s *search) Track(n int) *Track {
+	if n < 0 || n >= s.Tracks() {
+		panic("spotify: search track out of range")
+	}
+	sp_track := C.sp_search_track(s.sp_search, C.int(n))
+	return newTrack(s.session, sp_track)
+}
+
+func (s *search) Albums() int {
+	return int(C.sp_search_num_albums(s.sp_search))
+}
+
+func (s *search) TotalAlbums() int {
+	return int(C.sp_search_total_albums(s.sp_search))
+}
+
+func (s *search) Artists() int {
+	return int(C.sp_search_num_artists(s.sp_search))
+}
+
+func (s *search) TotalArtists() int {
+	return int(C.sp_search_total_artists(s.sp_search))
+}
+
+func (s *search) Playlists() int {
+	return int(C.sp_search_num_playlists(s.sp_search))
+}
+
+func (s *search) TotalPlaylists() int {
+	return int(C.sp_search_total_playlists(s.sp_search))
+}
+
+type Track struct {
+	session  *Session
+	sp_track *C.sp_track
+	wg       sync.WaitGroup
+}
+
+func newTrack(s *Session, t *C.sp_track) *Track {
+	track := &Track{
+		session:  s,
+		sp_track: t,
+	}
+	runtime.SetFinalizer(track, (*Track).finalize)
+	return track
+}
+
+func (t *Track) finalize() {
+	if t.sp_track != nil {
+		C.sp_track_release(t.sp_track)
+		t.sp_track = nil
+	}
+}
+
+// Error returns an error associated with a track.
+func (t *Track) Error() error {
+	return spError(C.sp_track_error(t.sp_track))
+}
+
+func (t *Track) OfflineStatus() TrackOfflineStatus {
+	status := C.sp_track_offline_get_status(t.sp_track)
+	return TrackOfflineStatus(status)
+}
+
+// Availability returns the track availability.
+func (t *Track) Availability() TrackAvailability {
+	avail := C.sp_track_get_availability(
+		t.session.session,
+		t.sp_track,
+	)
+	return TrackAvailability(avail)
+}
+
+// IsLocal returns true if the track is a local file.
+func (t *Track) IsLocal() bool {
+	local := C.sp_track_is_local(
+		t.session.session,
+		t.sp_track,
+	)
+	return local == 1
+}
+
+// IsAutoLinked returns true if the track is auto-linked to another track.
+func (t *Track) IsAutoLinked() bool {
+	linked := C.sp_track_is_autolinked(
+		t.session.session,
+		t.sp_track,
+	)
+	return linked == 1
+}
+
+func (t *Track) PlayableTrack() *Track {
+	sp_track := C.sp_track_get_playable(
+		t.session.session,
+		t.sp_track,
+	)
+	return newTrack(t.session, sp_track)
+}
+
+// IsPlaceholder returns true if the track is a
+// placeholder. Placeholder tracks are used to store
+// other objects than tracks in the playlist. Currently
+// this is used in the inbox to store artists, albums and
+// playlists.
+//
+// TODO Use sp_link_create_from_track() to get a link object
+// that points to the real object this "track" points to.
+func (t *Track) IsPlaceholder() bool {
+	placeholder := C.sp_track_is_placeholder(
+		t.sp_track,
+	)
+	return placeholder == 1
+}
+
+// IsStarred returns true if the track is starred by the
+// currently logged in user.
+func (t *Track) IsStarred() bool {
+	starred := C.sp_track_is_starred(
+		t.session.session,
+		t.sp_track,
+	)
+	return starred == 1
+}
+
+// TODO sp_track_set_starred
+
+func (t *Track) Artists() int {
+	return int(C.sp_track_num_artists(t.sp_track))
+}
+
+// TODO sp_track_artist
+
+func (t *Track) Wait() {
+	// TODO make this more elegant and based on callback
+	for {
+		if t.isLoaded() {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (t *Track) isLoaded() bool {
+	return C.sp_track_is_loaded(t.sp_track) == 1
+}
+
+// Album returns the album of the track.
+func (t *Track) Album() *Album {
+	sp_album := C.sp_track_album(t.sp_track)
+	return newAlbum(sp_album)
+}
+
+// Name returns the track name.
+func (t *Track) Name() string {
+	return C.GoString(C.sp_track_name(t.sp_track))
+}
+
+// Duration returns the length of the current track.
+func (t *Track) Duration() time.Duration {
+	ms := C.sp_track_duration(t.sp_track)
+	return time.Duration(ms) * time.Millisecond
+}
+
+// Popularity is in the range [0, 100].
+type Popularity int
+
+// Popularity returns the popularity for the track.
+func (t *Track) Popularity() Popularity {
+	p := C.sp_track_popularity(t.sp_track)
+	return Popularity(p)
+}
+
+// Disc returns the disc number for the track.
+func (t *Track) Disc() int {
+	return int(C.sp_track_disc(t.sp_track))
+}
+
+// Position returns the position of a track on its disc.
+// It starts at 1 (relative the corresponding disc).
+//
+// This function returns valid data only for tracks
+// appearing in a browse artist or browse album result
+// (otherwise returns 0).
+func (t *Track) Index() int {
+	return int(C.sp_track_index(t.sp_track))
+}
+
+// TODO sp_localtrack_create
+
+type TrackAvailability C.sp_track_availability
+
+const (
+	// Track is not available
+	TrackAvailabilityUnavailable = TrackAvailability(C.SP_TRACK_AVAILABILITY_UNAVAILABLE)
+
+	// Track is available and can be played
+	TrackAvailabilityAvailable = TrackAvailability(C.SP_TRACK_AVAILABILITY_AVAILABLE)
+
+	// Track can not be streamed using this account
+	TrackAvailabilityNotStreamable = TrackAvailability(C.SP_TRACK_AVAILABILITY_NOT_STREAMABLE)
+
+	// Track not available on artist's request
+	TrackAvailabilityBannedByArtist = TrackAvailability(C.SP_TRACK_AVAILABILITY_BANNED_BY_ARTIST)
+)
+
+type TrackOfflineStatus C.sp_track_offline_status
+
+const (
+	// Not marked for offline
+	TrackOfflineNo = TrackOfflineStatus(C.SP_TRACK_OFFLINE_NO)
+	// Waiting for download
+	TrackOfflineWaiting = TrackOfflineStatus(C.SP_TRACK_OFFLINE_WAITING)
+	// Currently downloading
+	TrackOfflineDownloading = TrackOfflineStatus(C.SP_TRACK_OFFLINE_DOWNLOADING)
+	// Downloaded OK and can be played
+	TrackOfflineDone = TrackOfflineStatus(C.SP_TRACK_OFFLINE_DONE)
+	// TrackOfflineStatus during download
+	TrackOfflineTrackOfflineStatus = TrackOfflineStatus(C.SP_TRACK_OFFLINE_ERROR)
+	// Downloaded OK but not playable due to expiery
+	TrackOfflineDoneExpired = TrackOfflineStatus(C.SP_TRACK_OFFLINE_DONE_EXPIRED)
+	// Waiting because device have reached max number of allowed tracks
+	TrackOfflineLimitExceeded = TrackOfflineStatus(C.SP_TRACK_OFFLINE_LIMIT_EXCEEDED)
+	// Downloaded OK and available but scheduled for re-download
+	TrackOfflineDoneResync = TrackOfflineStatus(C.SP_TRACK_OFFLINE_DONE_RESYNC)
+)
+
+type Album struct {
+	sp_album *C.sp_album
+}
+
+type AlbumType C.sp_albumtype
+
+const (
+	// Normal album
+	AlbumTypeAlbum = AlbumType(C.SP_ALBUMTYPE_ALBUM)
+	// Single
+	AlbumTypeSingle = AlbumType(C.SP_ALBUMTYPE_SINGLE)
+	// Compilation
+	AlbumTypeCompilation = AlbumType(C.SP_ALBUMTYPE_COMPILATION)
+	// Unknown type
+	AlbumTypeUnknown = AlbumType(C.SP_ALBUMTYPE_UNKNOWN)
+)
+
+func newAlbum(sp_album *C.sp_album) *Album {
+	C.sp_album_add_ref(sp_album)
+	album := &Album{sp_album}
+	runtime.SetFinalizer(album, (*Album).finalize)
+	return album
+}
+
+func (a *Album) finalize() {
+	if a.sp_album != nil {
+		C.sp_album_release(a.sp_album)
+		a.sp_album = nil
+	}
+}
+
+func (a *Album) Wait() {
+	// TODO make perty
+	for {
+		if a.isLoaded() {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (a *Album) IsAvailable() bool {
+	return C.sp_album_is_available(a.sp_album) == 1
+}
+
+// TODO sp_album_artist
+// TODO sp_album_cover
+
+// Name returns the name of the album.
+func (a *Album) Name() string {
+	return C.GoString(C.sp_album_name(a.sp_album))
+}
+
+// Year returns the release year.
+func (a *Album) Year() int {
+	return int(C.sp_album_year(a.sp_album))
+}
+
+// Type returns the type of album.
+func (a *Album) Type() AlbumType {
+	return AlbumType(C.sp_album_type(a.sp_album))
+}
+
+func (a *Album) isLoaded() bool {
+	return C.sp_album_is_loaded(a.sp_album) == 1
 }
