@@ -16,7 +16,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -28,8 +27,9 @@ import (
 
 var (
 	appKeyPath = flag.String("key", "spotify_appkey.key", "path to app.key")
-	username = flag.String("username", "o.p", "spotify username")
-	password = flag.String("password", "", "spotify password")
+	username   = flag.String("username", "o.p", "spotify username")
+	password   = flag.String("password", "", "spotify password")
+	remember   = flag.Bool("remember", false, "remember username and password")
 )
 
 func main() {
@@ -41,9 +41,9 @@ func main() {
 	}
 
 	session, err := sp.NewSession(&sp.Config{
-		ApplicationKey: appKey,
-		ApplicationName: "gospshell",
-		CacheLocation: "tmp",
+		ApplicationKey:   appKey,
+		ApplicationName:  "gospshell",
+		CacheLocation:    "tmp",
 		SettingsLocation: "tmp",
 	})
 	if err != nil {
@@ -69,7 +69,7 @@ func main() {
 			Username: *username,
 			Password: *password,
 		}
-		if err = session.Login(credentials, true); err != nil {
+		if err = session.Login(credentials, *remember); err != nil {
 			log.Fatal(err)
 		}
 	} else {
@@ -87,13 +87,31 @@ func main() {
 		case <-session.ConnectionStateUpdates():
 			println("!! connstate", session.ConnectionState())
 		case err := <-session.LoginUpdates():
-			println("!! login updated", err)
+			go func() {
+				time.Sleep(2 * time.Second)
+				println("!! login updated", err)
+				opts := sp.SearchOptions{
+					Track:    sp.SearchSpec{0, 100},
+					Album:    sp.SearchSpec{0, 100},
+					Artist:   sp.SearchSpec{0, 100},
+					Playlist: sp.SearchSpec{0, 100},
+				}
+				search := session.Search("nasum", &opts)
+				search.Wait()
+				println("###done searching", search.Tracks(), search.TotalTracks(), search.Query())
+
+				for i := 0; i < search.Tracks(); i++ {
+					track := search.Track(i)
+					track.Wait()
+					println("track", i, track.Name())
+				}
+			}()
+
 		case <-session.LogoutUpdates():
 			println("!! logout updated")
 			running = false
-		case blob := <-session.CredentialsBlobUpdates():
+		case _ = <-session.CredentialsBlobUpdates():
 			println("!! blob updated")
-			fmt.Printf("%#v\n", blob)
 		case <-exit:
 			println("!! exiting")
 			if exitAttempts >= 3 {

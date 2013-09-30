@@ -134,7 +134,6 @@ const (
 
 	// An operating system error
 	ErrSystemFailure = Error(C.SP_ERROR_SYSTEM_FAILURE)
-
 )
 
 // spError converts an error from libspotify into a Go error.
