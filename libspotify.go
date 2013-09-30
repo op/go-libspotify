@@ -445,10 +445,17 @@ func (t *Track) finalize() {
 	}
 }
 
+// Error returns an error associated with a track.
 func (t *Track) Error() error {
 	return spError(C.sp_track_error(t.sp_track))
 }
 
+func (t *Track) OfflineStatus() TrackOfflineStatus {
+	status := C.sp_track_offline_get_status(t.sp_track)
+	return TrackOfflineStatus(status)
+}
+
+// Availability returns the track availability.
 func (t *Track) Availability() TrackAvailability {
 	avail := C.sp_track_get_availability(
 		t.session.session,
@@ -457,9 +464,102 @@ func (t *Track) Availability() TrackAvailability {
 	return TrackAvailability(avail)
 }
 
+// IsLocal returns true if the track is a local file.
+func (t *Track) IsLocal() bool {
+	local := C.sp_track_is_local(
+		t.session.session,
+		t.sp_track,
+	)
+	return local == 1
+}
+
+// IsAutoLinked returns true if the track is auto-linked to another track.
+func (t *Track) IsAutoLinked() bool {
+	linked := C.sp_track_is_autolinked(
+		t.session.session,
+		t.sp_track,
+	)
+	return linked == 1
+}
+
+func (t *Track) PlayableTrack() *Track {
+	sp_track := C.sp_track_get_playable(
+		t.session.session,
+		t.sp_track,
+	)
+	return newTrack(t.session, sp_track)
+}
+
+// IsPlaceholder returns true if the track is a
+// placeholder. Placeholder tracks are used to store
+// other objects than tracks in the playlist. Currently
+// this is used in the inbox to store artists, albums and
+// playlists.
+//
+// TODO Use sp_link_create_from_track() to get a link object
+// that points to the real object this "track" points to.
+func (t *Track) IsPlaceholder() bool {
+	placeholder := C.sp_track_is_placeholder(
+		t.sp_track,
+	)
+	return placeholder == 1
+}
+
+// IsStarred returns true if the track is starred by the
+// currently logged in user.
+func (t *Track) IsStarred() bool {
+	starred := C.sp_track_is_starred(
+		t.session.session,
+		t.sp_track,
+	)
+	return starred == 1
+}
+
+// TODO sp_track_set_starred
+
+func (t *Track) Artists() int {
+	return int(C.sp_track_num_artists(t.sp_track))
+}
+
+// TODO sp_track_artist
+// TODO sp_track_album
+
+// Name returns the track name.
 func (t *Track) Name() string {
 	return C.GoString(C.sp_track_name(t.sp_track))
 }
+
+// Duration returns the length of the current track.
+func (t *Track) Duration() time.Duration {
+	ms := C.sp_track_duration(t.sp_track)
+	return time.Duration(ms) * time.Millisecond
+}
+
+// Popularity is in the range [0, 100].
+type Popularity int
+
+// Popularity returns the popularity for the track.
+func (t *Track) Popularity() Popularity {
+	p := C.sp_track_popularity(t.sp_track)
+	return Popularity(p)
+}
+
+// Disc returns the disc number for the track.
+func (t *Track) Disc() int {
+	return int(C.sp_track_disc(t.sp_track))
+}
+
+// Position returns the position of a track on its disc.
+// It starts at 1 (relative the corresponding disc).
+//
+// This function returns valid data only for tracks
+// appearing in a browse artist or browse album result
+// (otherwise returns 0).
+func (t *Track) Index() int {
+	return int(C.sp_track_index(t.sp_track))
+}
+
+// TODO sp_localtrack_create
 
 func (t *Track) Wait() {
 	// TODO make this more elegant and based on callback
@@ -485,6 +585,27 @@ const (
 
 	// Track not available on artist's request
 	TrackAvailabilityBannedByArtist = TrackAvailability(C.SP_TRACK_AVAILABILITY_BANNED_BY_ARTIST)
+)
+
+type TrackOfflineStatus C.sp_track_offline_status
+
+const (
+	// Not marked for offline
+	TrackOfflineNo = Error(C.SP_TRACK_OFFLINE_NO)
+	// Waiting for download
+	TrackOfflineWaiting = Error(C.SP_TRACK_OFFLINE_WAITING)
+	// Currently downloading
+	TrackOfflineDownloading = Error(C.SP_TRACK_OFFLINE_DOWNLOADING)
+	// Downloaded OK and can be played
+	TrackOfflineDone = Error(C.SP_TRACK_OFFLINE_DONE)
+	// Error during download
+	TrackOfflineError = Error(C.SP_TRACK_OFFLINE_ERROR)
+	// Downloaded OK but not playable due to expiery
+	TrackOfflineDoneExpired = Error(C.SP_TRACK_OFFLINE_DONE_EXPIRED)
+	// Waiting because device have reached max number of allowed tracks
+	TrackOfflineLimitExceeded = Error(C.SP_TRACK_OFFLINE_LIMIT_EXCEEDED)
+	// Downloaded OK and available but scheduled for re-download
+	TrackOfflineDoneResync = Error(C.SP_TRACK_OFFLINE_DONE_RESYNC)
 )
 
 func (s *search) Track(n int) *Track {
