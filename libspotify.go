@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package libspotify adds language bindings for libspotify in Go. The
+// Package libspotify adds language bindings for spotify in Go. The
 // libspotify C API package allows third-party developers to write applications
 // that utilize the Spotify music streaming service.
 package libspotify
