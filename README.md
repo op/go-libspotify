@@ -14,7 +14,7 @@ This is a work in progress. Expect this API to change. Patches are welcome.
 
 After this command *go-libspotify* is ready to use. Its source will be in:
 
-    $GOROOT/src/pkg/github.com/op/go-libspotify
+    $GOPATH/src/pkg/github.com/op/go-libspotify
 
 You can use `go get -u -a` to update all installed packages.
 
