@@ -73,7 +73,7 @@ func main() {
 			log.Fatal(err)
 		}
 	} else {
-		if err = session.ReLogin(); err != nil {
+		if err = session.Relogin(); err != nil {
 			log.Fatal(err)
 		}
 	}
