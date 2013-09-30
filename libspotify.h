@@ -18,8 +18,6 @@
 #include <stdlib.h>
 #include <libspotify/api.h>
 
-sp_session_config* sp_session_config_new();
-void sp_session_config_free(sp_session_config *config);
 void set_callbacks(sp_session_callbacks*);
 
 void SP_CALLCONV cb_logged_in(sp_session *session, sp_error error);
@@ -43,5 +41,8 @@ void SP_CALLCONV cb_credentials_blob_updated(sp_session *session, const char *bl
 void SP_CALLCONV cb_connectionstate_updated(sp_session *session);
 // void SP_CALLCONV cb_scrobble_error(sp_session *session, sp_error error);
 // void SP_CALLCONV cb_private_session_mode_changed(sp_session *session, bool is_private);
+
+sp_search* search_create(sp_session *session, const char *query, int track_offset, int track_count, int album_offset, int album_count, int artist_offset, int artist_count, int playlist_offset, int playlist_count, sp_search_type search_type, void *userdata);
+void SP_CALLCONV cb_search_complete(sp_search *search, void *userdata);
 
 #endif // __GO_LIBSPOTIFY_H

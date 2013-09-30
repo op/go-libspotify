@@ -49,7 +49,7 @@ type Config struct {
 	// will automatically be created based on ApplicationName.
 	UserAgent string
 
-	CacheLocation string
+	CacheLocation    string
 	SettingsLocation string
 }
 
@@ -79,17 +79,6 @@ var (
 
 	// callbacks is a static set of callbacks used for all sessions.
 	callbacks C.sp_session_callbacks
-
-	// mu is the mutex used when accessing sessions.
-	mu sync.RWMutex
-
-	// sessions is a set of all sessions currently active. Its purpose is
-	// to add an additional safety mechanism before calling into Go code.
-	//
-	// libspotify does currently only support one active session per process.
-	// This binding does not enforce this limitation and lets the library handle
-	// its flaws by itself.
-	sessions = make(map[*Session]bool)
 )
 
 // event is an internal type passed around to wake the main session thread up.
@@ -118,6 +107,7 @@ type Credentials struct {
 type Session struct {
 	config  C.sp_session_config
 	session *C.sp_session
+	mu      sync.Mutex
 
 	events chan event
 
@@ -131,24 +121,11 @@ type Session struct {
 }
 
 // sessionCall maps the C Spotify session structure to the Go session and
-// executes the given function if it can find it. If the session is unknown,
-// it is silently ignored.
-func sessionCall(spSession unsafe.Pointer, callback func(*Session)) error {
+// executes the given function.
+func sessionCall(spSession unsafe.Pointer, callback func(*Session)) {
 	s := (*C.sp_session)(spSession)
 	session := (*Session)(C.sp_session_userdata(s))
-	if session == nil {
-		panic("spotify: no session found")
-		// return errors.New("spotify: no session found")
-	}
-
-	mu.RLock()
-	defer mu.RUnlock()
-	if !sessions[session] {
-		panic("spotify: not a valid session")
-		// return fmt.Errorf("spotify: not a valid session: %p", session)
-	}
-	callback((*Session)(session))
-	return nil
+	callback(session)
 }
 
 // NewSession creates a new session based on the given configuration.
@@ -165,11 +142,6 @@ func NewSession(config *Config) (*Session, error) {
 	if err := session.setupConfig(config); err != nil {
 		return nil, err
 	}
-
-	// Register the session as a valid session receiving callbacks.
-	mu.Lock()
-	sessions[session] = true
-	mu.Unlock()
 
 	// libspotify expects certain methods to be called from the same thread as was
 	// used when the sp_session_create was called. Hence we do lock down one
@@ -190,11 +162,7 @@ func NewSession(config *Config) (*Session, error) {
 		session.processEvents()
 	}()
 
-	// Remove the session again if an error is encountered.
 	if err := <-errc; err != nil {
-		mu.Lock()
-		delete(sessions, session)
-		mu.Unlock()
 		return nil, err
 	}
 
@@ -278,10 +246,6 @@ func (s *Session) Close() error {
 		s.events <- eStop
 		s.wg.Wait()
 
-		mu.Lock()
-		delete(sessions, s)
-		mu.Unlock()
-
 		s.free()
 	})
 	return nil
@@ -309,6 +273,8 @@ func (s *Session) Login(c Credentials, remember bool) error {
 		defer C.free(unsafe.Pointer(cblob))
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rc := C.sp_session_login(
 		s.session,
 		cusername,
@@ -375,6 +341,211 @@ func (s *Session) LogoutUpdates() <-chan struct{} {
 	return s.loggedOut
 }
 
+type SearchType C.sp_search_type
+
+const (
+	SearchStandard SearchType = SearchType(C.SP_SEARCH_STANDARD)
+	SearchSuggest             = SearchType(C.SP_SEARCH_SUGGEST)
+)
+
+type SearchSpec struct {
+	// Search result offset
+	Offset int
+
+	// Search result limitation
+	Count int
+}
+
+// SearchOptions contains offsets and limits for the search query.
+type SearchOptions struct {
+	// Track is the number of tracks to search for
+	Track SearchSpec
+
+	// Album is the number of albums to search for
+	Album SearchSpec
+
+	// Artist is the number of artists to search for
+	Artist SearchSpec
+
+	// Playlist is the number of playlists to search for
+	Playlist SearchSpec
+
+	// Type is the search type. Defaults to normal searching.
+	Type SearchType
+}
+
+type search struct {
+	session   *Session
+	sp_search *C.sp_search
+	wg        sync.WaitGroup
+}
+
+func (s *search) init(session *Session, sp_search *C.sp_search) {
+	s.session = session
+	s.sp_search = sp_search
+	s.wg.Add(1)
+	runtime.SetFinalizer(s, (*search).finalize)
+}
+
+func (s *search) finalize() {
+	if s.sp_search != nil {
+		C.sp_search_release(s.sp_search)
+		s.sp_search = nil
+	}
+}
+
+func (s *search) Wait() error {
+	s.wg.Wait()
+	return s.Error()
+}
+
+func (s *search) cbComplete() {
+	s.wg.Done()
+}
+
+func (s *search) Error() error {
+	return spError(C.sp_search_error(s.sp_search))
+}
+
+func (s *search) Query() string {
+	return C.GoString(C.sp_search_query(s.sp_search))
+}
+
+func (s *search) DidYouMean() string {
+	return C.GoString(C.sp_search_did_you_mean(s.sp_search))
+}
+
+func (s *search) Tracks() int {
+	return int(C.sp_search_num_tracks(s.sp_search))
+}
+
+func (s *search) TotalTracks() int {
+	return int(C.sp_search_total_tracks(s.sp_search))
+}
+
+type Track struct {
+	session  *Session
+	sp_track *C.sp_track
+	wg       sync.WaitGroup
+}
+
+func newTrack(s *Session, t *C.sp_track) *Track {
+	track := &Track{
+		session:  s,
+		sp_track: t,
+	}
+	runtime.SetFinalizer(track, (*Track).finalize)
+	return track
+}
+
+func (t *Track) finalize() {
+	if t.sp_track != nil {
+		C.sp_track_release(t.sp_track)
+		t.sp_track = nil
+	}
+}
+
+func (t *Track) Error() error {
+	return spError(C.sp_track_error(t.sp_track))
+}
+
+func (t *Track) Availability() TrackAvailability {
+	avail := C.sp_track_get_availability(
+		t.session.session,
+		t.sp_track,
+	)
+	return TrackAvailability(avail)
+}
+
+func (t *Track) Name() string {
+	return C.GoString(C.sp_track_name(t.sp_track))
+}
+
+func (t *Track) Wait() {
+	// TODO make this more elegant and based on callback
+	for {
+		if C.sp_track_is_loaded(t.sp_track) == 1 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+type TrackAvailability C.sp_track_availability
+
+const (
+	// Track is not available
+	TrackAvailabilityUnavailable = TrackAvailability(C.SP_TRACK_AVAILABILITY_UNAVAILABLE)
+
+	// Track is available and can be played
+	TrackAvailabilityAvailable = TrackAvailability(C.SP_TRACK_AVAILABILITY_AVAILABLE)
+
+	// Track can not be streamed using this account
+	TrackAvailabilityNotStreamable = TrackAvailability(C.SP_TRACK_AVAILABILITY_NOT_STREAMABLE)
+
+	// Track not available on artist's request
+	TrackAvailabilityBannedByArtist = TrackAvailability(C.SP_TRACK_AVAILABILITY_BANNED_BY_ARTIST)
+)
+
+func (s *search) Track(n int) *Track {
+	if n < 0 || n >= s.Tracks() {
+		panic("spotify: search track out of range")
+	}
+	sp_track := C.sp_search_track(s.sp_search, C.int(n))
+	return newTrack(s.session, sp_track)
+}
+
+func (s *search) Albums() int {
+	return int(C.sp_search_num_albums(s.sp_search))
+}
+
+func (s *search) TotalAlbums() int {
+	return int(C.sp_search_total_albums(s.sp_search))
+}
+
+func (s *search) Artists() int {
+	return int(C.sp_search_num_artists(s.sp_search))
+}
+
+func (s *search) TotalArtists() int {
+	return int(C.sp_search_total_artists(s.sp_search))
+}
+
+func (s *search) Playlists() int {
+	return int(C.sp_search_num_playlists(s.sp_search))
+}
+
+func (s *search) TotalPlaylists() int {
+	return int(C.sp_search_total_playlists(s.sp_search))
+}
+
+// Search searches Spotify for track, album, artist and / or playlists.
+func (s *Session) Search(query string, opts *SearchOptions) *search {
+	cquery := C.CString(query)
+	defer C.free(unsafe.Pointer(cquery))
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var search search
+	sp_search := C.search_create(
+		s.session,
+		cquery,
+		C.int(opts.Track.Offset),
+		C.int(opts.Track.Count),
+		C.int(opts.Album.Offset),
+		C.int(opts.Album.Count),
+		C.int(opts.Artist.Offset),
+		C.int(opts.Artist.Count),
+		C.int(opts.Playlist.Offset),
+		C.int(opts.Playlist.Count),
+		C.sp_search_type(opts.Type),
+		unsafe.Pointer(&search),
+	)
+	search.init(s, sp_search)
+	return &search
+}
+
 func (s *Session) processEvents() {
 	var nextTimeoutMs C.int
 
@@ -382,7 +553,9 @@ func (s *Session) processEvents() {
 	defer s.wg.Done()
 
 	for {
+		s.mu.Lock()
 		rc := C.sp_session_process_events(s.session, &nextTimeoutMs)
+		s.mu.Unlock()
 		if err := spError(rc); err != nil {
 			println("process error err", err)
 			continue
@@ -493,4 +666,10 @@ func go_credentials_blob_updated(spSession unsafe.Pointer, data *C.char) {
 //export go_connectionstate_updated
 func go_connectionstate_updated(spSession unsafe.Pointer) {
 	sessionCall(spSession, (*Session).cbConnectionStateUpdated)
+}
+
+//export go_search_complete
+func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
+	s := (*search)(userdata)
+	s.cbComplete()
 }
