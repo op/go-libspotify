@@ -617,6 +617,7 @@ type Track struct {
 }
 
 func newTrack(s *Session, t *C.sp_track) *Track {
+	C.sp_track_add_ref(t)
 	track := &Track{
 		session:  s,
 		sp_track: t,
@@ -708,7 +709,13 @@ func (t *Track) Artists() int {
 	return int(C.sp_track_num_artists(t.sp_track))
 }
 
-// TODO sp_track_artist
+func (t *Track) Artist(n int) *Artist {
+	if n < 0 || n > t.Artists() {
+		panic("spotify: track artist index out of range")
+	}
+	sp_artist := C.sp_track_artist(t.sp_track, C.int(n))
+	return newArtist(sp_artist)
+}
 
 func (t *Track) Wait() {
 	// TODO make this more elegant and based on callback
@@ -870,3 +877,41 @@ func (a *Album) Type() AlbumType {
 func (a *Album) isLoaded() bool {
 	return C.sp_album_is_loaded(a.sp_album) == 1
 }
+
+type Artist struct {
+	sp_artist *C.sp_artist
+}
+
+func newArtist(sp_artist *C.sp_album) *Artist {
+	C.sp_artist_add_ref(sp_artist)
+	artist := &Artist{sp_artist}
+	runtime.SetFinalizer(artist, (*Artist).finalize)
+	return artist
+}
+
+func (a *Artist) finalize() {
+	if a.sp_artist != nil {
+		C.sp_artist_release(a.sp_artist)
+		a.sp_artist = nil
+	}
+}
+
+func (a *Artist) isLoaded() bool {
+	return C.sp_artist_is_loaded(a.sp_artist) == 1
+}
+
+func (a *Artist) Wait() {
+	// TODO make perty
+	for {
+		if a.isLoaded() {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (a *Artist) Name() string {
+	return C.GoString(C.sp_artist_name(a.sp_artist))
+}
+
+// TODO sp_artist_portrait
