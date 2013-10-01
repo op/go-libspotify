@@ -134,9 +134,9 @@ type Credentials struct {
 
 // Session is the representation of a Spotify session.
 type Session struct {
-	config  C.sp_session_config
-	session *C.sp_session
-	mu      sync.Mutex
+	config     C.sp_session_config
+	sp_session *C.sp_session
+	mu         sync.Mutex
 
 	events chan event
 
@@ -183,7 +183,7 @@ func NewSession(config *Config) (*Session, error) {
 		// TODO make sure we have enough threads available
 		runtime.LockOSThread()
 
-		err := spError(C.sp_session_create(&session.config, &session.session))
+		err := spError(C.sp_session_create(&session.config, &session.sp_session))
 		errc <- err
 		if err != nil {
 			return
@@ -279,7 +279,7 @@ func (s *Session) free() {
 func (s *Session) Close() error {
 	var err error
 	s.dealloc.Do(func() {
-		err = spError(C.sp_session_release(s.session))
+		err = spError(C.sp_session_release(s.sp_session))
 
 		s.events <- eStop
 		s.wg.Wait()
@@ -314,7 +314,7 @@ func (s *Session) Login(c Credentials, remember bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rc := C.sp_session_login(
-		s.session,
+		s.sp_session,
 		cusername,
 		cpassword,
 		crememberme,
@@ -328,7 +328,7 @@ func (s *Session) Login(c Credentials, remember bool) error {
 //
 // If no credentials are stored, this will return ErrNoCredentials.
 func (s *Session) Relogin() error {
-	return spError(C.sp_session_relogin(s.session))
+	return spError(C.sp_session_relogin(s.sp_session))
 }
 
 // Logout logs the currently logged in user out
@@ -337,7 +337,7 @@ func (s *Session) Relogin() error {
 // libspotify is currently logged in. Otherwise, the settings and
 // cache may be lost.
 func (s *Session) Logout() error {
-	return spError(C.sp_session_logout(s.session))
+	return spError(C.sp_session_logout(s.sp_session))
 }
 
 // FlushCaches makes libspotify write all data that is meant to
@@ -345,13 +345,13 @@ func (s *Session) Logout() error {
 // periodically by itself and also on logout. Under normal
 // conditions this shouldn't be needed.
 func (s *Session) FlushCaches() error {
-	return spError(C.sp_session_flush_caches(s.session))
+	return spError(C.sp_session_flush_caches(s.sp_session))
 }
 
 // ConnectionState returns the current connection state for the
 // session.
 func (s *Session) ConnectionState() ConnectionState {
-	state := C.sp_session_connectionstate(s.session)
+	state := C.sp_session_connectionstate(s.sp_session)
 	return ConnectionState(state)
 }
 
@@ -433,7 +433,7 @@ func (s *Session) Search(query string, opts *SearchOptions) *search {
 
 	var search search
 	sp_search := C.search_create(
-		s.session,
+		s.sp_session,
 		cquery,
 		C.int(opts.Track.Offset),
 		C.int(opts.Track.Count),
@@ -458,7 +458,7 @@ func (s *Session) processEvents() {
 
 	for {
 		s.mu.Lock()
-		rc := C.sp_session_process_events(s.session, &nextTimeoutMs)
+		rc := C.sp_session_process_events(s.sp_session, &nextTimeoutMs)
 		s.mu.Unlock()
 		if err := spError(rc); err != nil {
 			println("process error err", err)
@@ -898,7 +898,7 @@ func (t *Track) OfflineStatus() TrackOfflineStatus {
 // Availability returns the track availability.
 func (t *Track) Availability() TrackAvailability {
 	avail := C.sp_track_get_availability(
-		t.session.session,
+		t.session.sp_session,
 		t.sp_track,
 	)
 	return TrackAvailability(avail)
@@ -907,7 +907,7 @@ func (t *Track) Availability() TrackAvailability {
 // IsLocal returns true if the track is a local file.
 func (t *Track) IsLocal() bool {
 	local := C.sp_track_is_local(
-		t.session.session,
+		t.session.sp_session,
 		t.sp_track,
 	)
 	return local == 1
@@ -916,7 +916,7 @@ func (t *Track) IsLocal() bool {
 // IsAutoLinked returns true if the track is auto-linked to another track.
 func (t *Track) IsAutoLinked() bool {
 	linked := C.sp_track_is_autolinked(
-		t.session.session,
+		t.session.sp_session,
 		t.sp_track,
 	)
 	return linked == 1
@@ -926,7 +926,7 @@ func (t *Track) IsAutoLinked() bool {
 // played if the given track is played.
 func (t *Track) PlayableTrack() *Track {
 	sp_track := C.sp_track_get_playable(
-		t.session.session,
+		t.session.sp_session,
 		t.sp_track,
 	)
 	return newTrack(t.session, sp_track)
@@ -961,7 +961,7 @@ func (t *Track) LinkOffset(offset time.Duration) *Link {
 // user.
 func (t *Track) IsStarred() bool {
 	starred := C.sp_track_is_starred(
-		t.session.session,
+		t.session.sp_session,
 		t.sp_track,
 	)
 	return starred == 1
@@ -1321,7 +1321,7 @@ func newToplist(s *Session, ttype toplistType, r ToplistRegion, u string) *topli
 	t := &toplist{session: s, ttype: ttype}
 	t.wg.Add(1)
 	t.sp_toplistbrowse = C.toplistbrowse_create(
-		t.session.session,
+		t.session.sp_session,
 		C.sp_toplisttype(ttype),
 		C.sp_toplistregion(r),
 		cusername,
