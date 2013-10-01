@@ -44,5 +44,7 @@ void SP_CALLCONV cb_connectionstate_updated(sp_session *session);
 
 sp_search* search_create(sp_session *session, const char *query, int track_offset, int track_count, int album_offset, int album_count, int artist_offset, int artist_count, int playlist_offset, int playlist_count, sp_search_type search_type, void *userdata);
 void SP_CALLCONV cb_search_complete(sp_search *search, void *userdata);
+sp_toplistbrowse* toplistbrowse_create(sp_session *session, sp_toplisttype type, sp_toplistregion region, const char *username, void *userdata);
+void SP_CALLCONV cb_toplistbrowse_complete(sp_toplistbrowse *toplist, void *userdata);
 
 #endif // __GO_LIBSPOTIFY_H

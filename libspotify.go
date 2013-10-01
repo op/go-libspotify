@@ -27,6 +27,7 @@ import "C"
 import (
 	"errors"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -317,6 +318,17 @@ func (s *Session) ConnectionState() ConnectionState {
 	return ConnectionState(state)
 }
 
+func (s *Session) ArtistsToplist(region ToplistRegion) *ArtistsToplist {
+	return newArtistsToplist(s, region, "")
+}
+
+func (s *Session) ArtistsToplistForUser(username string) *ArtistsToplist {
+	// TODO replace username string with a *User, make a
+	// NewUser(string) method instead. Even move Toplist()
+	// method on to the User object?
+	return newArtistsToplist(s, ToplistRegionUser, username)
+}
+
 // CredentialsBlobUpdates returns a channel used to get updates
 // for credential blobs.
 func (s *Session) CredentialsBlobUpdates() <-chan []byte {
@@ -529,6 +541,22 @@ func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
 	s.cbComplete()
 }
 
+//export go_toplistbrowse_complete
+func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.Pointer) {
+	// TODO find a nicer way to do this
+	t := (*toplist)(userdata)
+	switch t.ttype {
+	case toplistTypeArtists:
+		((*ArtistsToplist)(userdata)).cbComplete()
+	case toplistTypeAlbums:
+		((*AlbumsToplist)(userdata)).cbComplete()
+	case toplistTypeTracks:
+		((*TracksToplist)(userdata)).cbComplete()
+	default:
+		panic("spotify: unhandled toplist type")
+	}
+}
+
 type LinkType C.sp_linktype
 
 const (
@@ -656,9 +684,8 @@ func (s *search) release() {
 	s.sp_search = nil
 }
 
-func (s *search) Wait() error {
+func (s *search) Wait() {
 	s.wg.Wait()
-	return s.Error()
 }
 
 func (s *search) Link() *Link {
@@ -695,9 +722,6 @@ func (s *search) Track(n int) *Track {
 		panic("spotify: search track out of range")
 	}
 	sp_track := C.sp_search_track(s.sp_search, C.int(n))
-	if sp_track == nil {
-		panic("spotify: invalid track index")
-	}
 	return newTrack(s.session, sp_track)
 }
 
@@ -845,9 +869,6 @@ func (t *Track) Artist(n int) *Artist {
 		panic("spotify: track artist index out of range")
 	}
 	sp_artist := C.sp_track_artist(t.sp_track, C.int(n))
-	if sp_artist == nil {
-		panic("spotify: invalid track artist index")
-	}
 	return newArtist(sp_artist)
 }
 
@@ -1124,4 +1145,180 @@ func (u *User) CanonicalName() string {
 // DisplayName returns the user's displayable username.
 func (u *User) DisplayName() string {
 	return C.GoString(C.sp_user_display_name(u.sp_user))
+}
+
+type toplistType C.sp_toplisttype
+
+const (
+	toplistTypeArtists = toplistType(C.SP_TOPLIST_TYPE_ARTISTS)
+	toplistTypeAlbums  = toplistType(C.SP_TOPLIST_TYPE_ALBUMS)
+	toplistTypeTracks  = toplistType(C.SP_TOPLIST_TYPE_TRACKS)
+)
+
+type ToplistRegion C.sp_toplistregion
+
+const (
+	// Global toplist
+	ToplistRegionEverywhere = ToplistRegion(C.SP_TOPLIST_REGION_EVERYWHERE)
+
+	// Toplist for the given user
+	ToplistRegionUser = ToplistRegion(C.SP_TOPLIST_REGION_USER)
+)
+
+// NewToplistRegion returns the toplist region for a ISO
+// 3166-1 country code.
+//
+// Also see ToplistRegionEverywhere and ToplistRegionUser
+// for some special constants.
+func NewToplistRegion(region string) ToplistRegion {
+	if len(region) != 2 {
+		panic("spotify: region should have length 2")
+	}
+	region = strings.ToUpper(region)
+	r := int(region[0])<<8 | int(region[1])
+	return ToplistRegion(r)
+}
+
+func (r ToplistRegion) String() string {
+	switch r {
+	case ToplistRegionEverywhere:
+		return "Worldwide"
+	case ToplistRegionUser:
+		// TODO fetch users country?
+		return "User"
+	}
+	return string([]byte{byte(r >> 8), byte(r)})
+}
+
+type toplist struct {
+	session *Session
+
+	sp_toplistbrowse *C.sp_toplistbrowse
+	ttype            toplistType
+
+	wg sync.WaitGroup
+}
+
+func newToplist(s *Session, ttype toplistType, r ToplistRegion, u string) *toplist {
+	var cusername *C.char
+	if len(u) > 0 {
+		cusername = C.CString(u)
+		defer C.free(unsafe.Pointer(cusername))
+	}
+
+	t := &toplist{session: s, ttype: ttype}
+	t.wg.Add(1)
+	t.sp_toplistbrowse = C.toplistbrowse_create(
+		t.session.session,
+		C.sp_toplisttype(ttype),
+		C.sp_toplistregion(r),
+		cusername,
+		unsafe.Pointer(&t),
+	)
+	runtime.SetFinalizer(t, (*toplist).release)
+	return t
+}
+
+func (t *toplist) release() {
+	if t.sp_toplistbrowse == nil {
+		panic("spotify: toplist object has no sp_toplistbrowse object")
+	}
+	C.sp_toplistbrowse_release(t.sp_toplistbrowse)
+	t.sp_toplistbrowse = nil
+}
+
+func (t *toplist) cbComplete() {
+	println("toplist done", t)
+	t.wg.Done()
+}
+
+func (t *toplist) Wait() {
+	println("waiting for toplist", t)
+	t.wg.Wait()
+}
+
+func (t *toplist) Error() error {
+	return spError(C.sp_toplistbrowse_error(t.sp_toplistbrowse))
+}
+
+// Duration returns the time spent waiting for
+// the Spotify backend to serve the toplist.
+func (t *toplist) Duration() time.Duration {
+	ms := C.sp_toplistbrowse_backend_request_duration(t.sp_toplistbrowse)
+	if ms < 0 {
+		ms = 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// TODO plural here, really?
+type ArtistsToplist struct {
+	*toplist
+}
+
+func newArtistsToplist(s *Session, r ToplistRegion, u string) *ArtistsToplist {
+	toplist := newToplist(s, toplistTypeArtists, r, u)
+	return &ArtistsToplist{toplist}
+}
+
+func (at *ArtistsToplist) Artists() int {
+	return int(C.sp_toplistbrowse_num_artists(at.sp_toplistbrowse))
+}
+
+func (at *ArtistsToplist) Artist(n int) *Artist {
+	if n < 0 || n >= at.Artists() {
+		panic("spotify: toplist artist out of range")
+	}
+	sp_artist := C.sp_toplistbrowse_artist(at.sp_toplistbrowse, C.int(n))
+	return newArtist(sp_artist)
+}
+
+// TODO
+type AlbumsToplist struct {
+	*toplist
+}
+
+func newAlbumsToplist(s *Session, r ToplistRegion, u string) *AlbumsToplist {
+	toplist := newToplist(s, toplistTypeAlbums, r, u)
+	return &AlbumsToplist{toplist}
+}
+
+func (at *AlbumsToplist) Albums() int {
+	return int(C.sp_toplistbrowse_num_albums(at.sp_toplistbrowse))
+}
+
+func (at *AlbumsToplist) Album(n int) *Album {
+	if n < 0 || n >= at.Albums() {
+		panic("spotify: toplist album out of range")
+	}
+	sp_album := C.sp_toplistbrowse_album(at.sp_toplistbrowse, C.int(n))
+	return newAlbum(sp_album)
+}
+
+type TracksToplist struct {
+	*toplist
+}
+
+func newTracksToplist(s *Session, r ToplistRegion, u string) *TracksToplist {
+	toplist := newToplist(s, toplistTypeTracks, r, u)
+	return &TracksToplist{toplist}
+}
+
+// Tracks returns the numbers of tracks in the toplist.
+func (tt *TracksToplist) Tracks() int {
+	return int(C.sp_toplistbrowse_num_tracks(tt.sp_toplistbrowse))
+}
+
+// Track returns the track given the index from the toplist.
+func (tt *TracksToplist) Track(n int) *Track {
+	if n < 0 || n >= tt.Tracks() {
+		panic("spotify: toplist track out of range")
+	}
+	sp_track := C.sp_toplistbrowse_track(tt.sp_toplistbrowse, C.int(n))
+	return newTrack(tt.session, sp_track)
+}
+
+// BuildId returns the libspotify build ID.
+func BuildId() string {
+	return C.GoString(C.sp_build_id())
 }

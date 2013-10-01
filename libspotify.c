@@ -78,3 +78,16 @@ void SP_CALLCONV cb_search_complete(sp_search *search, void *userdata)
 {
 	go_search_complete(search, userdata);
 }
+
+sp_toplistbrowse* toplistbrowse_create(sp_session *session, sp_toplisttype type, sp_toplistregion region, const char *username, void *userdata)
+{
+	return sp_toplistbrowse_create(
+		session, type, region, username,
+		cb_toplistbrowse_complete, userdata
+	);
+}
+
+void SP_CALLCONV cb_toplistbrowse_complete(sp_toplistbrowse *toplist, void *userdata)
+{
+	go_toplistbrowse_complete(toplist, userdata);
+}

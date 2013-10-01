@@ -40,6 +40,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	println("libspotify", sp.BuildId())
 	session, err := sp.NewSession(&sp.Config{
 		ApplicationKey:   appKey,
 		ApplicationName:  "gospshell",
@@ -91,10 +92,10 @@ func main() {
 				time.Sleep(2 * time.Second)
 				println("!! login updated", err)
 				opts := sp.SearchOptions{
-					Track:    sp.SearchSpec{0, 100},
-					Album:    sp.SearchSpec{0, 100},
-					Artist:   sp.SearchSpec{0, 100},
-					Playlist: sp.SearchSpec{0, 100},
+					Track:    sp.SearchSpec{0, 10},
+					Album:    sp.SearchSpec{0, 10},
+					Artist:   sp.SearchSpec{0, 10},
+					Playlist: sp.SearchSpec{0, 10},
 				}
 				search := session.Search("nasum", &opts)
 				search.Wait()
@@ -115,6 +116,15 @@ func main() {
 					album := track.Album()
 					album.Wait()
 					println("album", album.Name(), album.Link().String())
+				}
+
+				region := sp.NewToplistRegion("se")
+				toplist := session.ArtistsToplist(region)
+				toplist.Wait()
+				println("artists toplist loaded", region.String(), toplist.Duration().String())
+				for i := 0; i < toplist.Artists() && i < 10; i++ {
+					artist := toplist.Artist(i)
+					println(i, artist.Name(), artist.Link().String())
 				}
 			}()
 
