@@ -140,6 +140,9 @@ type Session struct {
 
 	events chan event
 
+	metadataUpdatesMu sync.Mutex
+	metadataUpdates   map[updatesListener]struct{}
+
 	credentialsBlobs chan []byte
 	states           chan struct{}
 	loggedIn         chan error
@@ -161,6 +164,8 @@ func sessionCall(spSession unsafe.Pointer, callback func(*Session)) {
 func NewSession(config *Config) (*Session, error) {
 	session := &Session{
 		events: make(chan event, 1),
+
+		metadataUpdates: make(map[updatesListener]struct{}),
 
 		credentialsBlobs: make(chan []byte, 1),
 		states:           make(chan struct{}, 1),
@@ -730,9 +735,33 @@ func (s *Session) cbLoggedOut() {
 	}
 }
 
+type updatesListener interface {
+	cbUpdated()
+}
+
 func (s *Session) cbMetadataUpdated() {
-	// TODO
-	println("metadata updated")
+	s.metadataUpdatesMu.Lock()
+	defer s.metadataUpdatesMu.Unlock()
+	for l := range s.metadataUpdates {
+		l.cbUpdated()
+	}
+}
+
+func (s *Session) listenForMetadataUpdates(checkIfLoaded func() bool, l updatesListener) bool {
+	var added bool
+	s.metadataUpdatesMu.Lock()
+	defer s.metadataUpdatesMu.Unlock()
+	if !checkIfLoaded() {
+		s.metadataUpdates[l] = struct{}{}
+		added = true
+	}
+	return added
+}
+
+func (s *Session) stopListenForMetadataUpdates(l updatesListener) {
+	s.metadataUpdatesMu.Lock()
+	defer s.metadataUpdatesMu.Unlock()
+	delete(s.metadataUpdates, l)
 }
 
 func (s *Session) cbConnectionError(err error) {
@@ -1033,24 +1062,26 @@ const (
 )
 
 type Link struct {
+	session *Session
 	sp_link *C.sp_link
 }
 
-func NewLink(link string) (*Link, error) {
-	clink := C.CString(link)
-	defer C.free(unsafe.Pointer(clink))
-	sp_link := C.sp_link_create_from_string(clink)
-	if sp_link == nil {
-		return nil, errors.New("spotify: invalid spotify link")
-	}
-	return newLink(sp_link, false), nil
-}
+// TODO needs session
+// func NewLink(link string) (*Link, error) {
+// 	clink := C.CString(link)
+// 	defer C.free(unsafe.Pointer(clink))
+// 	sp_link := C.sp_link_create_from_string(clink)
+// 	if sp_link == nil {
+// 		return nil, errors.New("spotify: invalid spotify link")
+// 	}
+// 	return newLink(sp_link, false), nil
+// }
 
-func newLink(sp_link *C.sp_link, incRef bool) *Link {
+func newLink(s *Session, sp_link *C.sp_link, incRef bool) *Link {
 	if incRef {
 		C.sp_link_add_ref(sp_link)
 	}
-	link := &Link{sp_link}
+	link := &Link{s, sp_link}
 	runtime.SetFinalizer(link, (*Link).release)
 	return link
 }
@@ -1085,8 +1116,7 @@ func (l *Link) Track() (*Track, error) {
 	if l.Type() != LinkTypeTrack {
 		return nil, errors.New("spotify: link is not a track")
 	}
-	// HACK add session everywhere so we can reach this
-	return newTrack(nil, C.sp_link_as_track(l.sp_link)), nil
+	return newTrack(l.session, C.sp_link_as_track(l.sp_link)), nil
 }
 
 // TrackOffset returns the offset for the track link.
@@ -1100,14 +1130,14 @@ func (l *Link) Album() (*Album, error) {
 	if l.Type() != LinkTypeAlbum {
 		return nil, errors.New("spotify: link is not an album")
 	}
-	return newAlbum(C.sp_link_as_album(l.sp_link)), nil
+	return newAlbum(l.session, C.sp_link_as_album(l.sp_link)), nil
 }
 
 func (l *Link) Artist() (*Artist, error) {
 	if l.Type() != LinkTypeArtist {
 		return nil, errors.New("spotify: link is not an artist")
 	}
-	return newArtist(C.sp_link_as_artist(l.sp_link)), nil
+	return newArtist(l.session, C.sp_link_as_artist(l.sp_link)), nil
 }
 
 // TODO sp_link_as_user
@@ -1139,7 +1169,7 @@ func (s *search) Wait() {
 
 func (s *search) Link() *Link {
 	sp_link := C.sp_link_create_from_search(s.sp_search)
-	return newLink(sp_link, false)
+	return newLink(s.session, sp_link, false)
 }
 
 func (s *search) cbComplete() {
@@ -1206,11 +1236,12 @@ type Track struct {
 
 func newTrack(s *Session, t *C.sp_track) *Track {
 	C.sp_track_add_ref(t)
-	track := &Track{
-		session:  s,
-		sp_track: t,
-	}
+	track := &Track{session: s, sp_track: t}
 	runtime.SetFinalizer(track, (*Track).release)
+
+	if s.listenForMetadataUpdates(track.isLoaded, track) {
+		track.wg.Add(1)
+	}
 	return track
 }
 
@@ -1220,6 +1251,24 @@ func (t *Track) release() {
 	}
 	C.sp_track_release(t.sp_track)
 	t.sp_track = nil
+}
+
+func (t *Track) cbUpdated() {
+	if t.isLoaded() {
+		t.wg.Done()
+	}
+}
+
+func (t *Track) Wait() {
+	t.wg.Wait()
+	if !t.isLoaded() {
+		panic("spotify: track is not loaded")
+	}
+	t.session.stopListenForMetadataUpdates(t)
+}
+
+func (t *Track) isLoaded() bool {
+	return C.sp_track_is_loaded(t.sp_track) == 1
 }
 
 // Error returns an error associated with a track.
@@ -1291,7 +1340,7 @@ func (t *Track) Link() *Link {
 func (t *Track) LinkOffset(offset time.Duration) *Link {
 	offsetMs := C.int(offset / time.Millisecond)
 	sp_link := C.sp_link_create_from_track(t.sp_track, offsetMs)
-	return newLink(sp_link, false)
+	return newLink(t.session, sp_link, false)
 }
 
 // IsStarred returns true if the track is starred by the currently logged in
@@ -1318,27 +1367,13 @@ func (t *Track) Artist(n int) *Artist {
 		panic("spotify: track artist index out of range")
 	}
 	sp_artist := C.sp_track_artist(t.sp_track, C.int(n))
-	return newArtist(sp_artist)
-}
-
-func (t *Track) Wait() {
-	// TODO make this more elegant and based on callback
-	for {
-		if t.isLoaded() {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func (t *Track) isLoaded() bool {
-	return C.sp_track_is_loaded(t.sp_track) == 1
+	return newArtist(t.session, sp_artist)
 }
 
 // Album returns the album of the track.
 func (t *Track) Album() *Album {
 	sp_album := C.sp_track_album(t.sp_track)
-	return newAlbum(sp_album)
+	return newAlbum(t.session, sp_album)
 }
 
 // Name returns the track name.
@@ -1416,7 +1451,9 @@ const (
 )
 
 type Album struct {
+	session  *Session
 	sp_album *C.sp_album
+	wg       sync.WaitGroup
 }
 
 type AlbumType C.sp_albumtype
@@ -1432,10 +1469,14 @@ const (
 	AlbumTypeUnknown = AlbumType(C.SP_ALBUMTYPE_UNKNOWN)
 )
 
-func newAlbum(sp_album *C.sp_album) *Album {
+func newAlbum(s *Session, sp_album *C.sp_album) *Album {
 	C.sp_album_add_ref(sp_album)
-	album := &Album{sp_album}
+	album := &Album{session: s, sp_album: sp_album}
 	runtime.SetFinalizer(album, (*Album).release)
+
+	if s.listenForMetadataUpdates(album.isLoaded, album) {
+		album.wg.Add(1)
+	}
 	return album
 }
 
@@ -1447,20 +1488,24 @@ func (a *Album) release() {
 	a.sp_album = nil
 }
 
-func (a *Album) Wait() {
-	// TODO make perty
-	for {
-		if a.isLoaded() {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+func (a *Album) cbUpdated() {
+	if a.isLoaded() {
+		a.wg.Done()
 	}
+}
+
+func (a *Album) Wait() {
+	a.wg.Wait()
+	if !a.isLoaded() {
+		panic("spotify: album is not loaded")
+	}
+	a.session.stopListenForMetadataUpdates(a)
 }
 
 // Link creates a link object from the album.
 func (a *Album) Link() *Link {
 	sp_link := C.sp_link_create_from_album(a.sp_album)
-	return newLink(sp_link, false)
+	return newLink(a.session, sp_link, false)
 }
 
 // IsAvailable returns true if the album is available in the current region and
@@ -1493,13 +1538,19 @@ func (a *Album) isLoaded() bool {
 }
 
 type Artist struct {
+	session   *Session
 	sp_artist *C.sp_artist
+	wg        sync.WaitGroup
 }
 
-func newArtist(sp_artist *C.sp_artist) *Artist {
+func newArtist(s *Session, sp_artist *C.sp_artist) *Artist {
 	C.sp_artist_add_ref(sp_artist)
-	artist := &Artist{sp_artist}
+	artist := &Artist{session: s, sp_artist: sp_artist}
 	runtime.SetFinalizer(artist, (*Artist).release)
+
+	if s.listenForMetadataUpdates(artist.isLoaded, artist) {
+		artist.wg.Add(1)
+	}
 	return artist
 }
 
@@ -1511,24 +1562,28 @@ func (a *Artist) release() {
 	a.sp_artist = nil
 }
 
+func (a *Artist) cbUpdated() {
+	if a.isLoaded() {
+		a.wg.Done()
+	}
+}
+
 func (a *Artist) isLoaded() bool {
 	return C.sp_artist_is_loaded(a.sp_artist) == 1
 }
 
 func (a *Artist) Wait() {
-	// TODO make perty
-	for {
-		if a.isLoaded() {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	a.wg.Wait()
+	if !a.isLoaded() {
+		panic("spotify: artist is not loaded")
 	}
+	a.session.stopListenForMetadataUpdates(a)
 }
 
 // Link creates a link object from the artist.
 func (a *Artist) Link() *Link {
 	sp_link := C.sp_link_create_from_artist(a.sp_artist)
-	return newLink(sp_link, false)
+	return newLink(a.session, sp_link, false)
 }
 
 // Name returns the name of the artist.
@@ -1726,7 +1781,7 @@ func (at *ArtistsToplist) Artist(n int) *Artist {
 		panic("spotify: toplist artist out of range")
 	}
 	sp_artist := C.sp_toplistbrowse_artist(at.sp_toplistbrowse, C.int(n))
-	return newArtist(sp_artist)
+	return newArtist(at.session, sp_artist)
 }
 
 // TODO
@@ -1748,7 +1803,7 @@ func (at *AlbumsToplist) Album(n int) *Album {
 		panic("spotify: toplist album out of range")
 	}
 	sp_album := C.sp_toplistbrowse_album(at.sp_toplistbrowse, C.int(n))
-	return newAlbum(sp_album)
+	return newAlbum(at.session, sp_album)
 }
 
 type TracksToplist struct {
