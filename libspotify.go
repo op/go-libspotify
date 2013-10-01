@@ -529,6 +529,112 @@ func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
 	s.cbComplete()
 }
 
+type LinkType C.sp_linktype
+
+const (
+	// Link type not valid - default until the library has parsed the link, or
+	// when parsing failed
+	LinkTypeInvalid = LinkType(C.SP_LINKTYPE_INVALID)
+	// Link type is track
+	LinkTypeTrack = LinkType(C.SP_LINKTYPE_TRACK)
+	// Link type is album
+	LinkTypeAlbum = LinkType(C.SP_LINKTYPE_ALBUM)
+	// Link type is artist
+	LinkTypeArtist = LinkType(C.SP_LINKTYPE_ARTIST)
+	// Link type is search
+	LinkTypeSearch = LinkType(C.SP_LINKTYPE_SEARCH)
+	// Link type is playlist
+	LinkTypePlaylist = LinkType(C.SP_LINKTYPE_PLAYLIST)
+	// Link type is profile
+	LinkTypeProfile = LinkType(C.SP_LINKTYPE_PROFILE)
+	// Link type is starred
+	LinkTypeStarred = LinkType(C.SP_LINKTYPE_STARRED)
+	// Link type is a local file
+	LinkTypeLocalTrack = LinkType(C.SP_LINKTYPE_LOCALTRACK)
+	// Link type is an image
+	LinkTypeImage = LinkType(C.SP_LINKTYPE_IMAGE)
+)
+
+type Link struct {
+	sp_link *C.sp_link
+}
+
+func NewLink(link string) (*Link, error) {
+	clink := C.CString(link)
+	defer C.free(unsafe.Pointer(clink))
+	sp_link := C.sp_link_create_from_string(clink)
+	if sp_link == nil {
+		return nil, errors.New("spotify: invalid spotify link")
+	}
+	return newLink(sp_link, false), nil
+}
+
+func newLink(sp_link *C.sp_link, incRef bool) *Link {
+	if incRef {
+		C.sp_link_add_ref(sp_link)
+	}
+	link := &Link{sp_link}
+	runtime.SetFinalizer(link, (*Link).release)
+	return link
+}
+
+func (l *Link) release() {
+	if l.sp_link == nil {
+		panic("spotify: link object has no sp_link object")
+	}
+	C.sp_link_release(l.sp_link)
+	l.sp_link = nil
+}
+
+// String implements the Stringer interface and returns the Link URI.
+func (l *Link) String() string {
+	// Determine how big string we need and get the string out.
+	size := C.sp_link_as_string(l.sp_link, nil, 0)
+	buf := (*C.char)(C.calloc(1, C.size_t(size)+1))
+	if buf == nil {
+		return "<invalid>"
+	}
+	defer C.free(unsafe.Pointer(buf))
+	C.sp_link_as_string(l.sp_link, buf, size+1)
+	return C.GoString(buf)
+}
+
+// LinkType returns the type of link.
+func (l *Link) Type() LinkType {
+	return LinkType(C.sp_link_type(l.sp_link))
+}
+
+func (l *Link) Track() (*Track, error) {
+	if l.Type() != LinkTypeTrack {
+		return nil, errors.New("spotify: link is not a track")
+	}
+	// HACK add session everywhere so we can reach this
+	return newTrack(nil, C.sp_link_as_track(l.sp_link)), nil
+}
+
+// TrackOffset returns the offset for the track link.
+func (l *Link) TrackOffset() time.Duration {
+	var offsetMs C.int
+	C.sp_link_as_track_and_offset(l.sp_link, &offsetMs)
+	return time.Duration(offsetMs) / time.Millisecond
+}
+
+func (l *Link) Album() (*Album, error) {
+	if l.Type() != LinkTypeAlbum {
+		return nil, errors.New("spotify: link is not an album")
+	}
+	return newAlbum(C.sp_link_as_album(l.sp_link)), nil
+}
+
+func (l *Link) Artist() (*Artist, error) {
+	if l.Type() != LinkTypeArtist {
+		return nil, errors.New("spotify: link is not an artist")
+	}
+	return newArtist(C.sp_link_as_artist(l.sp_link)), nil
+}
+
+// TODO sp_link_as_user
+
 type search struct {
 	session   *Session
 	sp_search *C.sp_search
@@ -539,19 +645,25 @@ func (s *search) init(session *Session, sp_search *C.sp_search) {
 	s.session = session
 	s.sp_search = sp_search
 	s.wg.Add(1)
-	runtime.SetFinalizer(s, (*search).finalize)
+	runtime.SetFinalizer(s, (*search).release)
 }
 
-func (s *search) finalize() {
-	if s.sp_search != nil {
-		C.sp_search_release(s.sp_search)
-		s.sp_search = nil
+func (s *search) release() {
+	if s.sp_search == nil {
+		panic("spotify: search object has no sp_search object")
 	}
+	C.sp_search_release(s.sp_search)
+	s.sp_search = nil
 }
 
 func (s *search) Wait() error {
 	s.wg.Wait()
 	return s.Error()
+}
+
+func (s *search) Link() *Link {
+	sp_link := C.sp_link_create_from_search(s.sp_search)
+	return newLink(sp_link, false)
 }
 
 func (s *search) cbComplete() {
@@ -583,6 +695,9 @@ func (s *search) Track(n int) *Track {
 		panic("spotify: search track out of range")
 	}
 	sp_track := C.sp_search_track(s.sp_search, C.int(n))
+	if sp_track == nil {
+		panic("spotify: invalid track index")
+	}
 	return newTrack(s.session, sp_track)
 }
 
@@ -622,15 +737,16 @@ func newTrack(s *Session, t *C.sp_track) *Track {
 		session:  s,
 		sp_track: t,
 	}
-	runtime.SetFinalizer(track, (*Track).finalize)
+	runtime.SetFinalizer(track, (*Track).release)
 	return track
 }
 
-func (t *Track) finalize() {
-	if t.sp_track != nil {
-		C.sp_track_release(t.sp_track)
-		t.sp_track = nil
+func (t *Track) release() {
+	if t.sp_track == nil {
+		panic("spotify: track object has no sp_track object")
 	}
+	C.sp_track_release(t.sp_track)
+	t.sp_track = nil
 }
 
 // Error returns an error associated with a track.
@@ -670,6 +786,8 @@ func (t *Track) IsAutoLinked() bool {
 	return linked == 1
 }
 
+// PlayableTrack returns the track which is the actual track that will be
+// played if the given track is played.
 func (t *Track) PlayableTrack() *Track {
 	sp_track := C.sp_track_get_playable(
 		t.session.session,
@@ -678,14 +796,12 @@ func (t *Track) PlayableTrack() *Track {
 	return newTrack(t.session, sp_track)
 }
 
-// IsPlaceholder returns true if the track is a
-// placeholder. Placeholder tracks are used to store
-// other objects than tracks in the playlist. Currently
-// this is used in the inbox to store artists, albums and
-// playlists.
+// IsPlaceholder returns true if the track is a placeholder. Placeholder tracks
+// are used to store other objects than tracks in the playlist. Currently this
+// is used in the inbox to store artists, albums and playlists.
 //
-// TODO Use sp_link_create_from_track() to get a link object
-// that points to the real object this "track" points to.
+// Use Link() to get a link object that points to the real object this "track"
+// points to.
 func (t *Track) IsPlaceholder() bool {
 	placeholder := C.sp_track_is_placeholder(
 		t.sp_track,
@@ -693,8 +809,20 @@ func (t *Track) IsPlaceholder() bool {
 	return placeholder == 1
 }
 
-// IsStarred returns true if the track is starred by the
-// currently logged in user.
+// Link returns a link object representing the track.
+func (t *Track) Link() *Link {
+	return t.LinkOffset(0)
+}
+
+// Link returns a link object representing the track at the given offset.
+func (t *Track) LinkOffset(offset time.Duration) *Link {
+	offsetMs := C.int(offset / time.Millisecond)
+	sp_link := C.sp_link_create_from_track(t.sp_track, offsetMs)
+	return newLink(sp_link, false)
+}
+
+// IsStarred returns true if the track is starred by the currently logged in
+// user.
 func (t *Track) IsStarred() bool {
 	starred := C.sp_track_is_starred(
 		t.session.session,
@@ -705,15 +833,21 @@ func (t *Track) IsStarred() bool {
 
 // TODO sp_track_set_starred
 
+// Artists returns the number of artists performing on the track.
 func (t *Track) Artists() int {
 	return int(C.sp_track_num_artists(t.sp_track))
 }
 
+// Artist returns the artist on the specified index. Use Artists to know how
+// many artists that performed on the track.
 func (t *Track) Artist(n int) *Artist {
-	if n < 0 || n > t.Artists() {
+	if n < 0 || n >= t.Artists() {
 		panic("spotify: track artist index out of range")
 	}
 	sp_artist := C.sp_track_artist(t.sp_track, C.int(n))
+	if sp_artist == nil {
+		panic("spotify: invalid track artist index")
+	}
 	return newArtist(sp_artist)
 }
 
@@ -831,15 +965,16 @@ const (
 func newAlbum(sp_album *C.sp_album) *Album {
 	C.sp_album_add_ref(sp_album)
 	album := &Album{sp_album}
-	runtime.SetFinalizer(album, (*Album).finalize)
+	runtime.SetFinalizer(album, (*Album).release)
 	return album
 }
 
-func (a *Album) finalize() {
-	if a.sp_album != nil {
-		C.sp_album_release(a.sp_album)
-		a.sp_album = nil
+func (a *Album) release() {
+	if a.sp_album == nil {
+		panic("spotify: album object has no sp_album object")
 	}
+	C.sp_album_release(a.sp_album)
+	a.sp_album = nil
 }
 
 func (a *Album) Wait() {
@@ -852,12 +987,21 @@ func (a *Album) Wait() {
 	}
 }
 
+// Link creates a link object from the album.
+func (a *Album) Link() *Link {
+	sp_link := C.sp_link_create_from_album(a.sp_album)
+	return newLink(sp_link, false)
+}
+
+// IsAvailable returns true if the album is available in the current region and
+// for playback.
 func (a *Album) IsAvailable() bool {
 	return C.sp_album_is_available(a.sp_album) == 1
 }
 
 // TODO sp_album_artist
 // TODO sp_album_cover
+// TODO sp_link_create_from_album_cover
 
 // Name returns the name of the album.
 func (a *Album) Name() string {
@@ -882,18 +1026,19 @@ type Artist struct {
 	sp_artist *C.sp_artist
 }
 
-func newArtist(sp_artist *C.sp_album) *Artist {
+func newArtist(sp_artist *C.sp_artist) *Artist {
 	C.sp_artist_add_ref(sp_artist)
 	artist := &Artist{sp_artist}
-	runtime.SetFinalizer(artist, (*Artist).finalize)
+	runtime.SetFinalizer(artist, (*Artist).release)
 	return artist
 }
 
-func (a *Artist) finalize() {
-	if a.sp_artist != nil {
-		C.sp_artist_release(a.sp_artist)
-		a.sp_artist = nil
+func (a *Artist) release() {
+	if a.sp_artist == nil {
+		panic("spotify: artist object has no sp_artist object")
 	}
+	C.sp_artist_release(a.sp_artist)
+	a.sp_artist = nil
 }
 
 func (a *Artist) isLoaded() bool {
@@ -910,8 +1055,73 @@ func (a *Artist) Wait() {
 	}
 }
 
+// Link creates a link object from the artist.
+func (a *Artist) Link() *Link {
+	sp_link := C.sp_link_create_from_artist(a.sp_artist)
+	return newLink(sp_link, false)
+}
+
+// Name returns the name of the artist.
 func (a *Artist) Name() string {
 	return C.GoString(C.sp_artist_name(a.sp_artist))
 }
 
 // TODO sp_artist_portrait
+// TODO sp_link_create_from_artist_portrait
+
+type RelationType C.sp_relation_type
+
+const (
+	// Not yet known
+	RelationTypeUnknown = RelationType(C.SP_RELATION_TYPE_UNKNOWN)
+	// No relation
+	RelationTypeNone = RelationType(C.SP_RELATION_TYPE_NONE)
+	// The currently logged in user is following this uer
+	RelationTypeUnIdirectional = RelationType(C.SP_RELATION_TYPE_UNIDIRECTIONAL)
+	// Bidirectional friendship established
+	RelationTypeBidirectional = RelationType(C.SP_RELATION_TYPE_BIDIRECTIONAL)
+)
+
+type User struct {
+	sp_user *C.sp_user
+}
+
+func newUser(sp_user *C.sp_user) *User {
+	C.sp_user_add_ref(sp_user)
+	user := &User{sp_user}
+	// TODO make an inteface with release and some convenient func
+	runtime.SetFinalizer(user, (*User).release)
+	return user
+}
+
+func (u *User) release() {
+	if u.sp_user == nil {
+		panic("spotify: user object has no sp_user object")
+	}
+	C.sp_user_release(u.sp_user)
+	u.sp_user = nil
+}
+
+func (u *User) Wait() {
+	// TODO hook into the callback/event system
+	for {
+		if u.isLoaded() {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (u *User) isLoaded() bool {
+	return C.sp_user_is_loaded(u.sp_user) == 1
+}
+
+// CanonicalName returns the user's canonical username.
+func (u *User) CanonicalName() string {
+	return C.GoString(C.sp_user_canonical_name(u.sp_user))
+}
+
+// DisplayName returns the user's displayable username.
+func (u *User) DisplayName() string {
+	return C.GoString(C.sp_user_display_name(u.sp_user))
+}

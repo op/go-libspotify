@@ -98,23 +98,23 @@ func main() {
 				}
 				search := session.Search("nasum", &opts)
 				search.Wait()
-				println("###done searching", search.Tracks(), search.TotalTracks(), search.Query())
+				println("###done searching", search.Tracks(), search.TotalTracks(), search.Query(), search.Link().String())
 
 				for i := 0; i < search.Tracks(); i++ {
 					track := search.Track(i)
 					track.Wait()
-					println("track", i, track.Name())
+					println("track", i, track.Name(), track.PlayableTrack(), track.Link().String())
 
 					// TODO ref counting issue?
-					// for j := 0; j < track.Artists(); j++ {
-					// 	artist := track.Artist(i)
-					// 	artist.Wait()
-					// 	println("artist", j, artist.Name())
-					// }
+					for j := 0; j < track.Artists(); j++ {
+						artist := track.Artist(j)
+						artist.Wait()
+						println("artist", j, artist.Name(), artist.Link().String())
+					}
 
 					album := track.Album()
 					album.Wait()
-					println("album", album.Name())
+					println("album", album.Name(), album.Link().String())
 				}
 			}()
 
