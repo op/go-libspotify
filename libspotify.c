@@ -19,11 +19,25 @@ void set_callbacks(sp_session_callbacks *callbacks)
 {
 	callbacks->logged_in = cb_logged_in;
 	callbacks->logged_out = cb_logged_out;
+	callbacks->metadata_updated = cb_metadata_updated;
 	callbacks->connection_error = cb_connection_error;
+	callbacks->message_to_user = cb_message_to_user;
 	callbacks->notify_main_thread = cb_notify_main_thread;
+	callbacks->music_delivery = cb_music_delivery;
+	callbacks->play_token_lost = cb_play_token_lost;
 	callbacks->log_message = cb_log_message;
+	callbacks->end_of_track = cb_end_of_track;
+	callbacks->streaming_error = cb_streaming_error;
+	callbacks->userinfo_updated = cb_userinfo_updated;
+	callbacks->start_playback = cb_start_playback;
+	callbacks->stop_playback = cb_stop_playback;
+	callbacks->get_audio_buffer_stats = cb_get_audio_buffer_stats;
+	callbacks->offline_status_updated = cb_offline_status_updated;
+	callbacks->offline_error = cb_offline_error;
 	callbacks->credentials_blob_updated = cb_credentials_blob_updated;
 	callbacks->connectionstate_updated = cb_connectionstate_updated;
+	callbacks->scrobble_error = cb_scrobble_error;
+	callbacks->private_session_mode_changed = cb_private_session_mode_changed;
 }
 
 void SP_CALLCONV cb_logged_in(sp_session *session, sp_error error)
@@ -56,6 +70,11 @@ void SP_CALLCONV cb_notify_main_thread(sp_session *session)
 	go_notify_main_thread(session);
 }
 
+int SP_CALLCONV cb_music_delivery(sp_session *session, const sp_audioformat *format, const void *frames, int num_frames)
+{
+	return go_music_delivery(session, (sp_audioformat *) format, (void *) frames, num_frames);
+}
+
 void SP_CALLCONV cb_play_token_lost(sp_session *session)
 {
 	go_play_token_lost(session);
@@ -66,9 +85,39 @@ void SP_CALLCONV cb_log_message(sp_session *session, const char *data)
 	go_log_message(session, (char *) data);
 }
 
+void SP_CALLCONV cb_end_of_track(sp_session *session)
+{
+	go_end_of_track(session);
+}
+
 void SP_CALLCONV cb_streaming_error(sp_session *session, sp_error error)
 {
 	go_streaming_error(session, error);
+}
+
+void SP_CALLCONV cb_userinfo_updated(sp_session *session)
+{
+	go_userinfo_updated(session);
+}
+
+void SP_CALLCONV cb_start_playback(sp_session *session)
+{
+	go_start_playback(session);
+}
+
+void SP_CALLCONV cb_stop_playback(sp_session *session)
+{
+	go_stop_playback(session);
+}
+
+void SP_CALLCONV cb_get_audio_buffer_stats(sp_session *session, sp_audio_buffer_stats *stats)
+{
+	go_get_audio_buffer_stats(session, stats);
+}
+
+void SP_CALLCONV cb_offline_status_updated(sp_session *session)
+{
+	go_offline_status_updated(session);
 }
 
 void SP_CALLCONV cb_offline_error(sp_session *session, sp_error error)

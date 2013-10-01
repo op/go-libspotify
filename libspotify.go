@@ -517,6 +517,11 @@ func (s *Session) cbNotifyMainThread() {
 	}
 }
 
+func (s *Session) cbMusicDelivery(frames []byte) int {
+	// TODO deliver frames. use io.Writer?
+	return len(frames)
+}
+
 func (s *Session) cbPlayTokenLost() {
 	// TODO
 	println("play token lost")
@@ -526,8 +531,32 @@ func (s *Session) cbLogMessage(message string) {
 	println("LOG", message)
 }
 
+func (s *Session) cbEndOfTrack() {
+	println("end of track")
+}
+
 func (s *Session) cbStreamingError(err error) {
 	println("streaming error", err.Error())
+}
+
+func (s *Session) cbUserInfoUpdated() {
+	println("user info updated")
+}
+
+func (s *Session) cbStartPlayback() {
+	println("start playback")
+}
+
+func (s *Session) cbStopPlayback() {
+	println("stop playback")
+}
+
+func (s *Session) cbGetAudioBufferStats() {
+	println("get audio buffer stats")
+}
+
+func (s *Session) cbOfflineStatusUpdated() {
+	println("offline status updated")
 }
 
 func (s *Session) cbOfflineError(err error) {
@@ -592,6 +621,16 @@ func go_notify_main_thread(spSession unsafe.Pointer) {
 	sessionCall(spSession, (*Session).cbNotifyMainThread)
 }
 
+//export go_music_delivery
+func go_music_delivery(spSession unsafe.Pointer, format *C.sp_audioformat, data unsafe.Pointer, num_frames C.int) C.int {
+	s := (*C.sp_session)(spSession)
+	session := (*Session)(C.sp_session_userdata(s))
+	frames := C.GoBytes(data, num_frames)
+	// TODO audio format isn't passed on
+	// TODO might be nice to do zero copy here
+	return C.int(session.cbMusicDelivery(frames))
+}
+
 //export go_play_token_lost
 func go_play_token_lost(spSession unsafe.Pointer) {
 	sessionCall(spSession, (*Session).cbPlayTokenLost)
@@ -604,11 +643,44 @@ func go_log_message(spSession unsafe.Pointer, message *C.char) {
 	})
 }
 
+//export go_end_of_track
+func go_end_of_track(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbEndOfTrack)
+}
+
 //export go_streaming_error
 func go_streaming_error(spSession unsafe.Pointer, err C.sp_error) {
 	sessionCall(spSession, func(s *Session) {
 		s.cbStreamingError(spError(err))
 	})
+}
+
+//export go_userinfo_updated
+func go_userinfo_updated(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbUserInfoUpdated)
+}
+
+//export go_start_playback
+func go_start_playback(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbStartPlayback)
+}
+
+//export go_stop_playback
+func go_stop_playback(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbStopPlayback)
+}
+
+//export go_get_audio_buffer_stats
+func go_get_audio_buffer_stats(spSession unsafe.Pointer, stats *C.sp_audio_buffer_stats) {
+	sessionCall(spSession, func(s *Session) {
+		// TODO make some translation here, pass in stats
+		s.cbGetAudioBufferStats()
+	})
+}
+
+//export go_offline_status_updated
+func go_offline_status_updated(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbOfflineStatusUpdated)
 }
 
 //export go_offline_error
