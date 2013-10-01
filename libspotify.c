@@ -36,9 +36,19 @@ void SP_CALLCONV cb_logged_out(sp_session *session)
 	go_logged_out(session);
 }
 
+void SP_CALLCONV cb_metadata_updated(sp_session *session)
+{
+	go_metadata_updated(session);
+}
+
 void SP_CALLCONV cb_connection_error(sp_session *session, sp_error error)
 {
 	go_connection_error(session, error);
+}
+
+void SP_CALLCONV cb_message_to_user(sp_session *session, const char *message)
+{
+	go_message_to_user(session, (char *) message);
 }
 
 void SP_CALLCONV cb_notify_main_thread(sp_session *session)
@@ -46,9 +56,24 @@ void SP_CALLCONV cb_notify_main_thread(sp_session *session)
 	go_notify_main_thread(session);
 }
 
+void SP_CALLCONV cb_play_token_lost(sp_session *session)
+{
+	go_play_token_lost(session);
+}
+
 void SP_CALLCONV cb_log_message(sp_session *session, const char *data)
 {
 	go_log_message(session, (char *) data);
+}
+
+void SP_CALLCONV cb_streaming_error(sp_session *session, sp_error error)
+{
+	go_streaming_error(session, error);
+}
+
+void SP_CALLCONV cb_offline_error(sp_session *session, sp_error error)
+{
+	go_offline_error(session, error);
 }
 
 void SP_CALLCONV cb_credentials_blob_updated(sp_session *session, const char *blob)
@@ -59,6 +84,16 @@ void SP_CALLCONV cb_credentials_blob_updated(sp_session *session, const char *bl
 void SP_CALLCONV cb_connectionstate_updated(sp_session *session)
 {
 	go_connectionstate_updated(session);
+}
+
+void SP_CALLCONV cb_scrobble_error(sp_session *session, sp_error error)
+{
+	go_scrobble_error(session, error);
+}
+
+void SP_CALLCONV cb_private_session_mode_changed(sp_session *session, bool is_private)
+{
+	go_private_session_mode_changed(session, is_private);
 }
 
 sp_search* search_create(sp_session *session, const char *query, int track_offset, int track_count, int album_offset, int album_count, int artist_offset, int artist_count, int playlist_offset, int playlist_count, sp_search_type search_type, void *userdata)

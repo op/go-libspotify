@@ -457,8 +457,18 @@ func (s *Session) cbLoggedOut() {
 	}
 }
 
+func (s *Session) cbMetadataUpdated() {
+	// TODO
+	println("metadata updated")
+}
+
 func (s *Session) cbConnectionError(err error) {
 	println("connection errror called", s, err)
+}
+
+func (s *Session) cbMessageToUser(message string) {
+	// TODO
+	println("message to user", message)
 }
 
 func (s *Session) cbNotifyMainThread() {
@@ -470,8 +480,21 @@ func (s *Session) cbNotifyMainThread() {
 	}
 }
 
+func (s *Session) cbPlayTokenLost() {
+	// TODO
+	println("play token lost")
+}
+
 func (s *Session) cbLogMessage(message string) {
 	println("LOG", message)
+}
+
+func (s *Session) cbStreamingError(err error) {
+	println("streaming error", err.Error())
+}
+
+func (s *Session) cbOfflineError(err error) {
+	println("offline error", err.Error())
 }
 
 func (s *Session) cbCredentialsBlobUpdated(blob []byte) {
@@ -488,6 +511,14 @@ func (s *Session) cbConnectionStateUpdated() {
 	}
 }
 
+func (s *Session) cbScrobbleError(err error) {
+	println("scrobble error", err.Error())
+}
+
+func (s *Session) cbPrivateSessionModeChanged(private bool) {
+	println("private mode changed", private)
+}
+
 //export go_logged_in
 func go_logged_in(spSession unsafe.Pointer, spErr C.sp_error) {
 	sessionCall(spSession, func(s *Session) {
@@ -500,10 +531,22 @@ func go_logged_out(spSession unsafe.Pointer) {
 	sessionCall(spSession, (*Session).cbLoggedOut)
 }
 
+//export go_metadata_updated
+func go_metadata_updated(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbMetadataUpdated)
+}
+
 //export go_connection_error
 func go_connection_error(spSession unsafe.Pointer, spErr C.sp_error) {
 	sessionCall(spSession, func(s *Session) {
 		s.cbConnectionError(spError(spErr))
+	})
+}
+
+//export go_message_to_user
+func go_message_to_user(spSession unsafe.Pointer, message *C.char) {
+	sessionCall(spSession, func(s *Session) {
+		s.cbMessageToUser(C.GoString(message))
 	})
 }
 
@@ -512,11 +555,29 @@ func go_notify_main_thread(spSession unsafe.Pointer) {
 	sessionCall(spSession, (*Session).cbNotifyMainThread)
 }
 
+//export go_play_token_lost
+func go_play_token_lost(spSession unsafe.Pointer) {
+	sessionCall(spSession, (*Session).cbPlayTokenLost)
+}
+
 //export go_log_message
-func go_log_message(spSession unsafe.Pointer, data *C.char) {
+func go_log_message(spSession unsafe.Pointer, message *C.char) {
 	sessionCall(spSession, func(s *Session) {
-		message := C.GoString(data)
-		s.cbLogMessage(message)
+		s.cbLogMessage(C.GoString(message))
+	})
+}
+
+//export go_streaming_error
+func go_streaming_error(spSession unsafe.Pointer, err C.sp_error) {
+	sessionCall(spSession, func(s *Session) {
+		s.cbStreamingError(spError(err))
+	})
+}
+
+//export go_offline_error
+func go_offline_error(spSession unsafe.Pointer, err C.sp_error) {
+	sessionCall(spSession, func(s *Session) {
+		s.cbOfflineError(spError(err))
 	})
 }
 
@@ -533,6 +594,20 @@ func go_credentials_blob_updated(spSession unsafe.Pointer, data *C.char) {
 //export go_connectionstate_updated
 func go_connectionstate_updated(spSession unsafe.Pointer) {
 	sessionCall(spSession, (*Session).cbConnectionStateUpdated)
+}
+
+//export go_scrobble_error
+func go_scrobble_error(spSession unsafe.Pointer, err C.sp_error) {
+	sessionCall(spSession, func(s *Session) {
+		s.cbScrobbleError(spError(err))
+	})
+}
+
+//export go_private_session_mode_changed
+func go_private_session_mode_changed(spSession unsafe.Pointer, is_private C.bool) {
+	sessionCall(spSession, func(s *Session) {
+		s.cbPrivateSessionModeChanged(is_private == 1)
+	})
 }
 
 //export go_search_complete
