@@ -331,6 +331,35 @@ func (s *Session) Relogin() error {
 	return spError(C.sp_session_relogin(s.sp_session))
 }
 
+func (s *Session) RememberedUser() string {
+	size := C.sp_session_remembered_user(s.sp_session, nil, 0)
+	buf := (*C.char)(C.malloc(C.size_t(size) + 1))
+	if buf == nil {
+		// TODO return error
+		return "<invalid>"
+	}
+	defer C.free(unsafe.Pointer(buf))
+	C.sp_session_remembered_user(s.sp_session, buf, C.size_t(size)+1)
+	return C.GoString(buf)
+}
+
+// LoginUsername returns the user's login username.
+func (s *Session) LoginUsername() string {
+	return C.GoString(C.sp_session_user_name(s.sp_session))
+}
+
+func (s *Session) ForgetMe() error {
+	return spError(C.sp_session_forget_me(s.sp_session))
+}
+
+func (s *Session) User() (*User, error) {
+	sp_user := C.sp_session_user(s.sp_session)
+	if sp_user == nil {
+		return nil, errors.New("spotify: no user logged in")
+	}
+	return newUser(sp_user), nil
+}
+
 // Logout logs the currently logged in user out
 //
 // Always call this before terminating the application and
@@ -353,6 +382,213 @@ func (s *Session) FlushCaches() error {
 func (s *Session) ConnectionState() ConnectionState {
 	state := C.sp_session_connectionstate(s.sp_session)
 	return ConnectionState(state)
+}
+
+// SetCacheSize sets the maximum cache size in megabytes.
+//
+// Setting it to 0 (the default) will let libspotify automatically resize the
+// cache (10% of disk free space).
+func (s *Session) SetCacheSize(size int) {
+	C.sp_session_set_cache_size(s.sp_session, C.size_t(size))
+}
+
+func (s *Session) Player() *player {
+	return &player{s}
+}
+
+type Bitrate C.sp_bitrate
+
+const (
+	Bitrate96k  = Bitrate(C.SP_BITRATE_96k)
+	Bitrate160k = Bitrate(C.SP_BITRATE_160k)
+	Bitrate320k = Bitrate(C.SP_BITRATE_320k)
+)
+
+func cbool(b bool) C.bool {
+	if b {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+func (s *Session) PreferredBitrate(bitrate Bitrate) error {
+	return spError(C.sp_session_preferred_bitrate(
+		s.sp_session, C.sp_bitrate(bitrate),
+	))
+}
+
+func (s *Session) PreferredOfflineBitrate(bitrate Bitrate, resync bool) error {
+	return spError(C.sp_session_preferred_offline_bitrate(
+		s.sp_session, C.sp_bitrate(bitrate), cbool(resync),
+	))
+}
+
+func (s *Session) VolumeNormalization() bool {
+	return C.sp_session_get_volume_normalization(s.sp_session) == 1
+}
+
+func (s *Session) SetVolumeNormalization(normalize bool) {
+	C.sp_session_set_volume_normalization(s.sp_session, cbool(normalize))
+}
+
+func (s *Session) PrivateSession() bool {
+	return C.sp_session_is_private_session(s.sp_session) == 1
+}
+
+func (s *Session) SetPrivateSession(private bool) {
+	C.sp_session_set_private_session(s.sp_session, cbool(private))
+}
+
+type SocialProvider C.sp_social_provider
+
+const (
+	SocialProviderSpotify  = SocialProvider(C.SP_SOCIAL_PROVIDER_SPOTIFY)
+	SocialProviderFacebook = SocialProvider(C.SP_SOCIAL_PROVIDER_FACEBOOK)
+	SocialProviderLastFM   = SocialProvider(C.SP_SOCIAL_PROVIDER_LASTFM)
+)
+
+type ScrobblingState C.sp_scrobbling_state
+
+const (
+	ScrobblingStateUseGlobalSetting = ScrobblingState(C.SP_SCROBBLING_STATE_USE_GLOBAL_SETTING)
+	ScrobblingStateLocalEnabled     = ScrobblingState(C.SP_SCROBBLING_STATE_LOCAL_ENABLED)
+	ScrobblingStateLocalDisabled    = ScrobblingState(C.SP_SCROBBLING_STATE_LOCAL_DISABLED)
+	ScrobblingStateGlobalEnabled    = ScrobblingState(C.SP_SCROBBLING_STATE_GLOBAL_ENABLED)
+	ScrobblingStateGlobalDisabled   = ScrobblingState(C.SP_SCROBBLING_STATE_GLOBAL_DISABLED)
+)
+
+func (s *Session) Scrobbling(provider SocialProvider) (ScrobblingState, error) {
+	var state C.sp_scrobbling_state
+	err := spError(C.sp_session_is_scrobbling(
+		s.sp_session, C.sp_social_provider(provider), &state,
+	))
+	return ScrobblingState(state), err
+}
+
+func (s *Session) SetScrobbling(provider SocialProvider, state ScrobblingState) error {
+	return spError(C.sp_session_set_scrobbling(
+		s.sp_session, C.sp_social_provider(provider), C.sp_scrobbling_state(state),
+	))
+}
+
+func (s *Session) IsScrobblingPossible(provider SocialProvider) bool {
+	var possible C.bool
+	C.sp_session_is_scrobbling_possible(
+		s.sp_session, C.sp_social_provider(provider), &possible,
+	)
+	return possible == 1
+}
+
+type ConnectionType C.sp_connection_type
+
+const (
+	// Connection type unknown (Default)
+	ConnectionTypeUnknown = ConnectionType(C.SP_CONNECTION_TYPE_UNKNOWN)
+	// No connection
+	ConnectionTypeNone = ConnectionType(C.SP_CONNECTION_TYPE_NONE)
+	// Mobile data (EDGE, 3G, etc)
+	ConnectionTypeMobile = ConnectionType(C.SP_CONNECTION_TYPE_MOBILE)
+	// Roamed mobile data (EDGE, 3G, etc)
+	ConnectionTypeMobileRoaming = ConnectionType(C.SP_CONNECTION_TYPE_MOBILE_ROAMING)
+	// Wireless connection
+	ConnectionTypeWifi = ConnectionType(C.SP_CONNECTION_TYPE_WIFI)
+	// Ethernet cable, etc
+	ConnectionTypeWired = ConnectionType(C.SP_CONNECTION_TYPE_WIRED)
+)
+
+func (s *Session) SetConnectionType(t ConnectionType) {
+	C.sp_session_set_connection_type(s.sp_session, C.sp_connection_type(t))
+}
+
+type ConnectionRules struct {
+	Network          bool
+	NetworkIfRoaming bool
+	SyncOverMobile   bool
+	SyncOverWifi     bool
+}
+
+func (s *Session) SetConnectionRules(r ConnectionRules) {
+	var rules C.sp_connection_rules
+	if r.Network {
+		rules |= C.SP_CONNECTION_RULE_NETWORK
+	}
+	if r.NetworkIfRoaming {
+		rules |= C.SP_CONNECTION_RULE_NETWORK_IF_ROAMING
+	}
+	if r.SyncOverMobile {
+		rules |= C.SP_CONNECTION_RULE_ALLOW_SYNC_OVER_MOBILE
+	}
+	if r.SyncOverWifi {
+		rules |= C.SP_CONNECTION_RULE_ALLOW_SYNC_OVER_WIFI
+	}
+	C.sp_session_set_connection_rules(s.sp_session, rules)
+}
+
+func (s *Session) OfflineTracksToSync() int {
+	return int(C.sp_offline_tracks_to_sync(s.sp_session))
+}
+
+func (s *Session) OfflinePlaylists() int {
+	return int(C.sp_offline_num_playlists(s.sp_session))
+}
+
+type OfflineSyncStatus struct {
+	sp_status C.sp_offline_sync_status
+}
+
+func (oss *OfflineSyncStatus) QueuedTracks() int {
+	return int(oss.sp_status.queued_tracks)
+}
+
+func (oss *OfflineSyncStatus) QueuedBytes() int {
+	return int(oss.sp_status.queued_bytes)
+}
+
+func (oss *OfflineSyncStatus) DoneTracks() int {
+	return int(oss.sp_status.done_tracks)
+}
+
+func (oss *OfflineSyncStatus) DoneBytes() int {
+	return int(oss.sp_status.done_bytes)
+}
+
+func (oss *OfflineSyncStatus) CopiedTracks() int {
+	return int(oss.sp_status.copied_tracks)
+}
+
+func (oss *OfflineSyncStatus) CopiedBytes() int {
+	return int(oss.sp_status.copied_bytes)
+}
+
+func (oss *OfflineSyncStatus) WillNotCopyTracks() int {
+	return int(oss.sp_status.willnotcopy_tracks)
+}
+
+func (oss *OfflineSyncStatus) ErrorTracks() int {
+	return int(oss.sp_status.error_tracks)
+}
+
+func (oss *OfflineSyncStatus) Synching() bool {
+	return oss.sp_status.syncing == 1
+}
+
+func (s *Session) OfflineSyncStatus() (*OfflineSyncStatus, error) {
+	status := &OfflineSyncStatus{}
+	synching := C.sp_offline_sync_get_status(s.sp_session, &status.sp_status)
+	if synching == 0 {
+		return nil, errors.New("spotify: no sync in progress")
+	}
+	return status, nil
+}
+
+func (s *Session) OfflineTimeLeft() time.Duration {
+	seconds := C.sp_offline_time_left(s.sp_session)
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *Session) Region() Region {
+	return Region(C.sp_session_user_country(s.sp_session))
 }
 
 func (s *Session) ArtistsToplist(region ToplistRegion) *ArtistsToplist {
@@ -741,6 +977,35 @@ func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.
 	}
 }
 
+type player struct {
+	s *Session
+}
+
+func (p *player) Load(t *Track) error {
+	return spError(C.sp_session_player_load(p.s.sp_session, t.sp_track))
+}
+
+func (p *player) Seek(offset time.Duration) {
+	ms := C.int(offset / time.Millisecond)
+	C.sp_session_player_seek(p.s.sp_session, ms)
+}
+
+func (p *player) Play() {
+	C.sp_session_player_play(p.s.sp_session, 1)
+}
+
+func (p *player) Pause() {
+	C.sp_session_player_play(p.s.sp_session, 1)
+}
+
+func (p *player) Unload() {
+	C.sp_session_player_unload(p.s.sp_session)
+}
+
+func (p *player) Prefetch(t *Track) error {
+	return spError(C.sp_session_player_prefetch(p.s.sp_session, t.sp_track))
+}
+
 type LinkType C.sp_linktype
 
 const (
@@ -802,7 +1067,7 @@ func (l *Link) release() {
 func (l *Link) String() string {
 	// Determine how big string we need and get the string out.
 	size := C.sp_link_as_string(l.sp_link, nil, 0)
-	buf := (*C.char)(C.calloc(1, C.size_t(size)+1))
+	buf := (*C.char)(C.malloc(C.size_t(size) + 1))
 	if buf == nil {
 		return "<invalid>"
 	}
@@ -1339,7 +1604,13 @@ const (
 	toplistTypeTracks  = toplistType(C.SP_TOPLIST_TYPE_TRACKS)
 )
 
-type ToplistRegion C.sp_toplistregion
+type Region int
+
+func (r Region) String() string {
+	return string([]byte{byte(r >> 8), byte(r)})
+}
+
+type ToplistRegion Region
 
 const (
 	// Global toplist
@@ -1370,8 +1641,9 @@ func (r ToplistRegion) String() string {
 	case ToplistRegionUser:
 		// TODO fetch users country?
 		return "User"
+	default:
+		return (Region)(r).String()
 	}
-	return string([]byte{byte(r >> 8), byte(r)})
 }
 
 type toplist struct {
