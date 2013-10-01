@@ -50,8 +50,36 @@ type Config struct {
 	// will automatically be created based on ApplicationName.
 	UserAgent string
 
-	CacheLocation    string
+	// CacheLocation defines were Spotify will write any cache
+	// files. This includes tracks, browse results and coverarts.
+	// Leave empty to disable.
+	CacheLocation string
+
+	// SettingsLocation defines where Spotify will write settings
+	// and per-user cache items. This includes playlists etc. It
+	// may be the same location as the CacheLocation.
+	//
+	// Note: this directory will not be automatically created.
 	SettingsLocation string
+
+	// CompressPlaylists, if enabled, will compress local copies
+	// of playlists to reduce disk space usage.
+	CompressPlaylists bool
+
+	// DisablePlaylistMetadataCache disables metadata caches for
+	// playlists. It reduces disk space usage at the expense of
+	// needing to request metadata from Spotify backend when
+	// loading lists.
+	DisablePlaylistMetadataCache bool
+
+	// InitiallyUnloadPlaylists will avoid loading playlists into
+	// RAM on startup if enabled.
+	InitiallyUnloadPlaylists bool
+
+	// TODO device_id
+	// TODO proxy
+	// TODO ca_certs
+	// TODO tracefile
 }
 
 // Connection state describes the state of the connection of a session.
@@ -214,6 +242,15 @@ func (s *Session) setupConfig(config *Config) error {
 	s.config.callbacks = &callbacks
 	s.config.userdata = unsafe.Pointer(s)
 
+	if config.CompressPlaylists {
+		s.config.compress_playlists = 1
+	}
+	if config.DisablePlaylistMetadataCache {
+		s.config.dont_save_metadata_for_playlists = 1
+	}
+	if config.InitiallyUnloadPlaylists {
+		s.config.initially_unload_playlists = 1
+	}
 	return nil
 }
 
