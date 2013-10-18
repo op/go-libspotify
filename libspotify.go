@@ -143,6 +143,7 @@ type Session struct {
 	metadataUpdatesMu sync.Mutex
 	metadataUpdates   map[updatesListener]struct{}
 
+	logMessages      chan string
 	credentialsBlobs chan []byte
 	states           chan struct{}
 	loggedIn         chan error
@@ -167,6 +168,7 @@ func NewSession(config *Config) (*Session, error) {
 
 		metadataUpdates: make(map[updatesListener]struct{}),
 
+		logMessages:      make(chan string, 128),
 		credentialsBlobs: make(chan []byte, 1),
 		states:           make(chan struct{}, 1),
 		loggedIn:         make(chan error, 1),
@@ -607,6 +609,33 @@ func (s *Session) ArtistsToplistForUser(username string) *ArtistsToplist {
 	return newArtistsToplist(s, ToplistRegionUser, username)
 }
 
+func (s *Session) AlbumsToplist(region ToplistRegion) *AlbumsToplist {
+	return newAlbumsToplist(s, region, "")
+}
+
+func (s *Session) AlbumsToplistForUser(username string) *AlbumsToplist {
+	// TODO replace username string with a *User, make a
+	// NewUser(string) method instead. Even move Toplist()
+	// method on to the User object?
+	return newAlbumsToplist(s, ToplistRegionUser, username)
+}
+
+func (s *Session) TracksToplist(region ToplistRegion) *TracksToplist {
+	return newTracksToplist(s, region, "")
+}
+
+func (s *Session) TracksToplistForUser(username string) *TracksToplist {
+	// TODO replace username string with a *User, make a
+	// NewUser(string) method instead. Even move Toplist()
+	// method on to the User object?
+	return newTracksToplist(s, ToplistRegionUser, username)
+}
+
+// LogMessages returns a channel used to get log messages.
+func (s *Session) LogMessages() <-chan string {
+	return s.logMessages
+}
+
 // CredentialsBlobUpdates returns a channel used to get updates
 // for credential blobs.
 func (s *Session) CredentialsBlobUpdates() <-chan []byte {
@@ -793,7 +822,10 @@ func (s *Session) cbPlayTokenLost() {
 }
 
 func (s *Session) cbLogMessage(message string) {
-	println("LOG", message)
+	select {
+	case s.logMessages <- message:
+	default:
+	}
 }
 
 func (s *Session) cbEndOfTrack() {
@@ -1212,12 +1244,28 @@ func (s *search) TotalAlbums() int {
 	return int(C.sp_search_total_albums(s.sp_search))
 }
 
+func (s *search) Album(n int) *Album {
+	if n < 0 || n >= s.Albums() {
+		panic("spotify: search album out of range")
+	}
+	sp_album := C.sp_search_album(s.sp_search, C.int(n))
+	return newAlbum(s.session, sp_album)
+}
+
 func (s *search) Artists() int {
 	return int(C.sp_search_num_artists(s.sp_search))
 }
 
 func (s *search) TotalArtists() int {
 	return int(C.sp_search_total_artists(s.sp_search))
+}
+
+func (s *search) Artist(n int) *Artist {
+	if n < 0 || n >= s.Artists() {
+		panic("spotify: search artist out of range")
+	}
+	sp_artist := C.sp_search_artist(s.sp_search, C.int(n))
+	return newArtist(s.session, sp_artist)
 }
 
 func (s *search) Playlists() int {
@@ -1227,6 +1275,8 @@ func (s *search) Playlists() int {
 func (s *search) TotalPlaylists() int {
 	return int(C.sp_search_total_playlists(s.sp_search))
 }
+
+// TODO sp_search_playlist
 
 type Track struct {
 	session  *Session
@@ -1514,7 +1564,11 @@ func (a *Album) IsAvailable() bool {
 	return C.sp_album_is_available(a.sp_album) == 1
 }
 
-// TODO sp_album_artist
+func (a *Album) Artist() *Artist {
+	// TODO we never should wait for metadata updates?
+	return newArtist(a.session, C.sp_album_artist(a.sp_album))
+}
+
 // TODO sp_album_cover
 // TODO sp_link_create_from_album_cover
 
@@ -1680,13 +1734,13 @@ const (
 //
 // Also see ToplistRegionEverywhere and ToplistRegionUser
 // for some special constants.
-func NewToplistRegion(region string) ToplistRegion {
+func NewToplistRegion(region string) (ToplistRegion, error) {
 	if len(region) != 2 {
-		panic("spotify: region should have length 2")
+		return 0, errors.New("spotify: invalid toplist region")
 	}
 	region = strings.ToUpper(region)
 	r := int(region[0])<<8 | int(region[1])
-	return ToplistRegion(r)
+	return ToplistRegion(r), nil
 }
 
 func (r ToplistRegion) String() string {
