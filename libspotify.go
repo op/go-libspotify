@@ -26,6 +26,7 @@ import "C"
 
 import (
 	"errors"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -342,8 +343,7 @@ func (s *Session) RememberedUser() string {
 	size := C.sp_session_remembered_user(s.sp_session, nil, 0)
 	buf := (*C.char)(C.malloc(C.size_t(size) + 1))
 	if buf == nil {
-		// TODO return error
-		return "<invalid>"
+		panic("spotify: failed to allocate memory")
 	}
 	defer C.free(unsafe.Pointer(buf))
 	C.sp_session_remembered_user(s.sp_session, buf, C.size_t(size)+1)
@@ -359,12 +359,23 @@ func (s *Session) ForgetMe() error {
 	return spError(C.sp_session_forget_me(s.sp_session))
 }
 
-func (s *Session) User() (*User, error) {
+// CurrentUser returns a user object for the currently logged in user.
+func (s *Session) CurrentUser() (*User, error) {
 	sp_user := C.sp_session_user(s.sp_session)
 	if sp_user == nil {
 		return nil, errors.New("spotify: no user logged in")
 	}
-	return newUser(sp_user), nil
+	return newUser(s, sp_user), nil
+}
+
+func (s *Session) GetUser(username string) (*User, error) {
+	uri := "spotify:user:" + url.QueryEscape(username)
+	link, err := s.ParseLink(uri)
+	if err != nil {
+		return nil, err
+	}
+
+	return link.User()
 }
 
 // Logout logs the currently logged in user out
@@ -599,36 +610,15 @@ func (s *Session) Region() Region {
 }
 
 func (s *Session) ArtistsToplist(region ToplistRegion) *ArtistsToplist {
-	return newArtistsToplist(s, region, "")
-}
-
-func (s *Session) ArtistsToplistForUser(username string) *ArtistsToplist {
-	// TODO replace username string with a *User, make a
-	// NewUser(string) method instead. Even move Toplist()
-	// method on to the User object?
-	return newArtistsToplist(s, ToplistRegionUser, username)
+	return newArtistsToplist(s, region, nil)
 }
 
 func (s *Session) AlbumsToplist(region ToplistRegion) *AlbumsToplist {
-	return newAlbumsToplist(s, region, "")
-}
-
-func (s *Session) AlbumsToplistForUser(username string) *AlbumsToplist {
-	// TODO replace username string with a *User, make a
-	// NewUser(string) method instead. Even move Toplist()
-	// method on to the User object?
-	return newAlbumsToplist(s, ToplistRegionUser, username)
+	return newAlbumsToplist(s, region, nil)
 }
 
 func (s *Session) TracksToplist(region ToplistRegion) *TracksToplist {
-	return newTracksToplist(s, region, "")
-}
-
-func (s *Session) TracksToplistForUser(username string) *TracksToplist {
-	// TODO replace username string with a *User, make a
-	// NewUser(string) method instead. Even move Toplist()
-	// method on to the User object?
-	return newTracksToplist(s, ToplistRegionUser, username)
+	return newTracksToplist(s, region, nil)
 }
 
 // LogMessages returns a channel used to get log messages.
@@ -718,6 +708,17 @@ func (s *Session) Search(query string, opts *SearchOptions) *search {
 	)
 	search.init(s, sp_search)
 	return &search
+}
+
+// ParseLink parses a Spotify URI / URL string.
+func (s *Session) ParseLink(link string) (*Link, error) {
+	clink := C.CString(link)
+	defer C.free(unsafe.Pointer(clink))
+	sp_link := C.sp_link_create_from_string(clink)
+	if sp_link == nil {
+		return nil, errors.New("spotify: invalid spotify link")
+	}
+	return newLink(s, sp_link, false), nil
 }
 
 func (s *Session) processEvents() {
@@ -1083,8 +1084,8 @@ const (
 	LinkTypeSearch = LinkType(C.SP_LINKTYPE_SEARCH)
 	// Link type is playlist
 	LinkTypePlaylist = LinkType(C.SP_LINKTYPE_PLAYLIST)
-	// Link type is profile
-	LinkTypeProfile = LinkType(C.SP_LINKTYPE_PROFILE)
+	// Link type is user
+	LinkTypeUser = LinkType(C.SP_LINKTYPE_PROFILE)
 	// Link type is starred
 	LinkTypeStarred = LinkType(C.SP_LINKTYPE_STARRED)
 	// Link type is a local file
@@ -1097,17 +1098,6 @@ type Link struct {
 	session *Session
 	sp_link *C.sp_link
 }
-
-// TODO needs session
-// func NewLink(link string) (*Link, error) {
-// 	clink := C.CString(link)
-// 	defer C.free(unsafe.Pointer(clink))
-// 	sp_link := C.sp_link_create_from_string(clink)
-// 	if sp_link == nil {
-// 		return nil, errors.New("spotify: invalid spotify link")
-// 	}
-// 	return newLink(sp_link, false), nil
-// }
 
 func newLink(s *Session, sp_link *C.sp_link, incRef bool) *Link {
 	if incRef {
@@ -1172,7 +1162,12 @@ func (l *Link) Artist() (*Artist, error) {
 	return newArtist(l.session, C.sp_link_as_artist(l.sp_link)), nil
 }
 
-// TODO sp_link_as_user
+func (l Link) User() (*User, error) {
+	if l.Type() != LinkTypeUser {
+		return nil, errors.New("spotify: link is not for a user")
+	}
+	return newUser(l.session, C.sp_link_as_user(l.sp_link)), nil
+}
 
 type search struct {
 	session   *Session
@@ -1662,12 +1657,13 @@ const (
 )
 
 type User struct {
+	session *Session
 	sp_user *C.sp_user
 }
 
-func newUser(sp_user *C.sp_user) *User {
+func newUser(session *Session, sp_user *C.sp_user) *User {
 	C.sp_user_add_ref(sp_user)
-	user := &User{sp_user}
+	user := &User{session, sp_user}
 	// TODO make an inteface with release and some convenient func
 	runtime.SetFinalizer(user, (*User).release)
 	return user
@@ -1700,6 +1696,21 @@ func (u *User) CanonicalName() string {
 	return C.GoString(C.sp_user_canonical_name(u.sp_user))
 }
 
+// ArtistsToplist loads the artist toplist for the user.
+func (u *User) ArtistsToplist() *ArtistsToplist {
+	return newArtistsToplist(u.session, toplistRegionUser, u)
+}
+
+// AlbumsToplist loads the album toplist for the user.
+func (u *User) AlbumsToplist() *AlbumsToplist {
+	return newAlbumsToplist(u.session, toplistRegionUser, u)
+}
+
+// TracksToplist loads the track toplist for the user.
+func (u *User) TracksToplist() *TracksToplist {
+	return newTracksToplist(u.session, toplistRegionUser, u)
+}
+
 // DisplayName returns the user's displayable username.
 func (u *User) DisplayName() string {
 	return C.GoString(C.sp_user_display_name(u.sp_user))
@@ -1726,7 +1737,7 @@ const (
 	ToplistRegionEverywhere = ToplistRegion(C.SP_TOPLIST_REGION_EVERYWHERE)
 
 	// Toplist for the given user
-	ToplistRegionUser = ToplistRegion(C.SP_TOPLIST_REGION_USER)
+	toplistRegionUser = ToplistRegion(C.SP_TOPLIST_REGION_USER)
 )
 
 // NewToplistRegion returns the toplist region for a ISO
@@ -1747,8 +1758,7 @@ func (r ToplistRegion) String() string {
 	switch r {
 	case ToplistRegionEverywhere:
 		return "Worldwide"
-	case ToplistRegionUser:
-		// TODO fetch users country?
+	case toplistRegionUser:
 		return "User"
 	default:
 		return (Region)(r).String()
@@ -1764,10 +1774,13 @@ type toplist struct {
 	wg sync.WaitGroup
 }
 
-func newToplist(s *Session, ttype toplistType, r ToplistRegion, u string) *toplist {
+// newToplist creates a wrapper around the toplist object. If the user object
+// is nil, the global toplist for the region will be used. Both user and region
+// can be specified if the toplist for the user's region should be fetched.
+func newToplist(s *Session, ttype toplistType, r ToplistRegion, user *User) *toplist {
 	var cusername *C.char
-	if len(u) > 0 {
-		cusername = C.CString(u)
+	if user != nil {
+		cusername = C.CString(user.CanonicalName())
 		defer C.free(unsafe.Pointer(cusername))
 	}
 
@@ -1821,8 +1834,8 @@ type ArtistsToplist struct {
 	*toplist
 }
 
-func newArtistsToplist(s *Session, r ToplistRegion, u string) *ArtistsToplist {
-	toplist := newToplist(s, toplistTypeArtists, r, u)
+func newArtistsToplist(s *Session, r ToplistRegion, user *User) *ArtistsToplist {
+	toplist := newToplist(s, toplistTypeArtists, r, user)
 	return &ArtistsToplist{toplist}
 }
 
@@ -1843,8 +1856,8 @@ type AlbumsToplist struct {
 	*toplist
 }
 
-func newAlbumsToplist(s *Session, r ToplistRegion, u string) *AlbumsToplist {
-	toplist := newToplist(s, toplistTypeAlbums, r, u)
+func newAlbumsToplist(s *Session, r ToplistRegion, user *User) *AlbumsToplist {
+	toplist := newToplist(s, toplistTypeAlbums, r, user)
 	return &AlbumsToplist{toplist}
 }
 
@@ -1864,8 +1877,8 @@ type TracksToplist struct {
 	*toplist
 }
 
-func newTracksToplist(s *Session, r ToplistRegion, u string) *TracksToplist {
-	toplist := newToplist(s, toplistTypeTracks, r, u)
+func newTracksToplist(s *Session, r ToplistRegion, user *User) *TracksToplist {
+	toplist := newToplist(s, toplistTypeTracks, r, user)
 	return &TracksToplist{toplist}
 }
 

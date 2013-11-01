@@ -299,26 +299,24 @@ func cmdToplist(session *sp.Session, args []string, abort <-chan bool) error {
 		*opts.artist = true
 	}
 
-	var username string
-	var region = sp.ToplistRegionUser
+	var user *sp.User
+	var region = sp.ToplistRegionEverywhere
 
 	if *opts.user {
+		var err error
 		if f.NArg() == 1 {
-			username = f.Arg(0)
+			user, err = session.GetUser(f.Arg(0))
 		} else {
-			user, err := session.User()
-			if err != nil {
-				return err
-			}
-			user.Wait()
-			username = user.CanonicalName()
+			user, err = session.CurrentUser()
 		}
+		if err != nil {
+			return err
+		}
+		user.Wait()
 	} else {
 		if f.NArg() > 0 {
 			var err error
-			if f.Arg(0) == "*" {
-				region = sp.ToplistRegionEverywhere
-			} else if region, err = sp.NewToplistRegion(f.Arg(0)); err != nil {
+			if region, err = sp.NewToplistRegion(f.Arg(0)); err != nil {
 				return errors.New("Either specify country (eg. SE) or * for worldwide")
 			}
 		}
@@ -327,7 +325,7 @@ func cmdToplist(session *sp.Session, args []string, abort <-chan bool) error {
 	if *opts.track {
 		var toplist *sp.TracksToplist
 		if *opts.user {
-			toplist = session.TracksToplistForUser(username)
+			toplist = user.TracksToplist()
 		} else {
 			toplist = session.TracksToplist(region)
 		}
@@ -340,7 +338,7 @@ func cmdToplist(session *sp.Session, args []string, abort <-chan bool) error {
 	if *opts.album {
 		var toplist *sp.AlbumsToplist
 		if *opts.user {
-			toplist = session.AlbumsToplistForUser(username)
+			toplist = user.AlbumsToplist()
 		} else {
 			toplist = session.AlbumsToplist(region)
 		}
@@ -353,7 +351,7 @@ func cmdToplist(session *sp.Session, args []string, abort <-chan bool) error {
 	if *opts.artist {
 		var toplist *sp.ArtistsToplist
 		if *opts.user {
-			toplist = session.ArtistsToplistForUser(username)
+			toplist = user.ArtistsToplist()
 		} else {
 			toplist = session.ArtistsToplist(region)
 		}
