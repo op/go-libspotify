@@ -355,6 +355,8 @@ func (s *Session) LoginUsername() string {
 	return C.GoString(C.sp_session_user_name(s.sp_session))
 }
 
+// ForgetMe removes any stored credentials. If no credentials are currently
+// stored, nothing will happen.
 func (s *Session) ForgetMe() error {
 	return spError(C.sp_session_forget_me(s.sp_session))
 }
@@ -421,6 +423,24 @@ const (
 	Bitrate160k = Bitrate(C.SP_BITRATE_160k)
 	Bitrate320k = Bitrate(C.SP_BITRATE_320k)
 )
+
+type SampleType C.sp_sampletype
+
+const (
+	// 16-bit signed integer samples
+	SampleTypeInt16NativeEndian = SampleType(C.SP_SAMPLETYPE_INT16_NATIVE_ENDIAN)
+)
+
+type AudioFormat struct {
+	// Sample type
+	SampleType SampleType
+
+	// Audio sample rate, in samples per second.
+	SampleRate int
+
+	// Number of channels. Currently 1 or 2.
+	Channels int
+}
 
 func cbool(b bool) C.bool {
 	if b {
@@ -812,7 +832,9 @@ func (s *Session) cbNotifyMainThread() {
 	}
 }
 
-func (s *Session) cbMusicDelivery(frames []byte) int {
+// cbMusicDelivery is called when there is decompressed audio data available.
+// NOTE: This function must never block.
+func (s *Session) cbMusicDelivery(format *AudioFormat, frames []byte) int {
 	// TODO deliver frames. use io.Writer?
 	return len(frames)
 }
@@ -923,10 +945,14 @@ func go_notify_main_thread(spSession unsafe.Pointer) {
 func go_music_delivery(spSession unsafe.Pointer, format *C.sp_audioformat, data unsafe.Pointer, num_frames C.int) C.int {
 	s := (*C.sp_session)(spSession)
 	session := (*Session)(C.sp_session_userdata(s))
-	frames := C.GoBytes(data, num_frames)
-	// TODO audio format isn't passed on
 	// TODO might be nice to do zero copy here
-	return C.int(session.cbMusicDelivery(frames))
+	frames := C.GoBytes(data, num_frames)
+	audioFormat := &AudioFormat{
+		SampleType(format.sample_type),
+		int(format.sample_rate),
+		int(format.channels),
+	}
+	return C.int(session.cbMusicDelivery(audioFormat, frames))
 }
 
 //export go_play_token_lost
