@@ -61,7 +61,7 @@ func main() {
 	println("libspotify", sp.BuildId())
 	session, err := sp.NewSession(&sp.Config{
 		ApplicationKey:   appKey,
-		ApplicationName:  "gospshell",
+		ApplicationName:  prog,
 		CacheLocation:    "tmp",
 		SettingsLocation: "tmp",
 	})
