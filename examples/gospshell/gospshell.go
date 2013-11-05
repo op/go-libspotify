@@ -236,20 +236,23 @@ func cmdSearch(session *sp.Session, args []string, abort <-chan bool) error {
 	spec := sp.SearchSpec{*opts.offset, *opts.limit}
 
 	if *opts.track {
-		sOpts.Track = spec
+		sOpts.Tracks = spec
 	}
 	if *opts.album {
-		sOpts.Album = spec
+		sOpts.Albums = spec
 	}
 	if *opts.artist {
-		sOpts.Artist = spec
+		sOpts.Artists = spec
 	}
 	if *opts.playlist {
-		sOpts.Playlist = spec
+		sOpts.Playlists = spec
 	}
 
 	// TODO cancel wait when abort<-true
-	search := session.Search(query, &sOpts)
+	search, err := session.Search(query, &sOpts)
+	if err != nil {
+		return err
+	}
 	search.Wait()
 
 	println("###done searching", search.Tracks(), search.TotalTracks(), search.Query(), search.Link().String())

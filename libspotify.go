@@ -687,47 +687,25 @@ type SearchSpec struct {
 
 // SearchOptions contains offsets and limits for the search query.
 type SearchOptions struct {
-	// Track is the number of tracks to search for
-	Track SearchSpec
+	// Tracks is the number of tracks to search for
+	Tracks SearchSpec
 
-	// Album is the number of albums to search for
-	Album SearchSpec
+	// Albums is the number of albums to search for
+	Albums SearchSpec
 
-	// Artist is the number of artists to search for
-	Artist SearchSpec
+	// Artists is the number of artists to search for
+	Artists SearchSpec
 
 	// Playlist is the number of playlists to search for
-	Playlist SearchSpec
+	Playlists SearchSpec
 
 	// Type is the search type. Defaults to normal searching.
 	Type SearchType
 }
 
 // Search searches Spotify for track, album, artist and / or playlists.
-func (s *Session) Search(query string, opts *SearchOptions) *search {
-	cquery := C.CString(query)
-	defer C.free(unsafe.Pointer(cquery))
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var search search
-	sp_search := C.search_create(
-		s.sp_session,
-		cquery,
-		C.int(opts.Track.Offset),
-		C.int(opts.Track.Count),
-		C.int(opts.Album.Offset),
-		C.int(opts.Album.Count),
-		C.int(opts.Artist.Offset),
-		C.int(opts.Artist.Count),
-		C.int(opts.Playlist.Offset),
-		C.int(opts.Playlist.Count),
-		C.sp_search_type(opts.Type),
-		unsafe.Pointer(&search),
-	)
-	search.init(s, sp_search)
-	return &search
+func (s *Session) Search(query string, opts *SearchOptions) (*search, error) {
+	return newSearch(s, query, opts)
 }
 
 // ParseLink parses a Spotify URI / URL string.
@@ -1201,11 +1179,32 @@ type search struct {
 	wg        sync.WaitGroup
 }
 
-func (s *search) init(session *Session, sp_search *C.sp_search) {
-	s.session = session
-	s.sp_search = sp_search
+func newSearch(session *Session, query string, opts *SearchOptions) (*search, error) {
+	s := &search{session: session}
 	s.wg.Add(1)
+
+	cquery := C.CString(query)
+	defer C.free(unsafe.Pointer(cquery))
+
+	s.sp_search = C.search_create(
+		s.session.sp_session,
+		cquery,
+		C.int(opts.Tracks.Offset),
+		C.int(opts.Tracks.Count),
+		C.int(opts.Albums.Offset),
+		C.int(opts.Albums.Count),
+		C.int(opts.Artists.Offset),
+		C.int(opts.Artists.Count),
+		C.int(opts.Playlists.Offset),
+		C.int(opts.Playlists.Count),
+		C.sp_search_type(opts.Type),
+		unsafe.Pointer(s),
+	)
+	if s.sp_search == nil {
+		return nil, errors.New("spotify: failed to search")
+	}
 	runtime.SetFinalizer(s, (*search).release)
+	return s, nil
 }
 
 func (s *search) release() {
