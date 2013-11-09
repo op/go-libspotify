@@ -144,13 +144,19 @@ type Session struct {
 	metadataUpdatesMu sync.Mutex
 	metadataUpdates   map[updatesListener]struct{}
 
-	logMessages      chan string
+	// rawLogMessages is the first place where all log messages ends up, and
+	// later once parsed they're moved to the logMessage channel which is
+	// exposed.
+	rawLogMessages chan string
+	logMessages    chan *LogMessage
+
 	credentialsBlobs chan []byte
 	states           chan struct{}
 	loggedIn         chan error
 	loggedOut        chan struct{}
 
 	wg      sync.WaitGroup
+	stop    chan struct{}
 	dealloc sync.Once
 }
 
@@ -169,7 +175,8 @@ func NewSession(config *Config) (*Session, error) {
 
 		metadataUpdates: make(map[updatesListener]struct{}),
 
-		logMessages:      make(chan string, 128),
+		rawLogMessages:   make(chan string, 128),
+		logMessages:      make(chan *LogMessage, 128),
 		credentialsBlobs: make(chan []byte, 1),
 		states:           make(chan struct{}, 1),
 		loggedIn:         make(chan error, 1),
@@ -202,6 +209,8 @@ func NewSession(config *Config) (*Session, error) {
 	if err := <-errc; err != nil {
 		return nil, err
 	}
+
+	go session.processBackground()
 
 	return session, nil
 }
@@ -642,7 +651,7 @@ func (s *Session) TracksToplist(region ToplistRegion) *TracksToplist {
 }
 
 // LogMessages returns a channel used to get log messages.
-func (s *Session) LogMessages() <-chan string {
+func (s *Session) LogMessages() <-chan *LogMessage {
 	return s.logMessages
 }
 
@@ -719,6 +728,14 @@ func (s *Session) ParseLink(link string) (*Link, error) {
 	return newLink(s, sp_link, false), nil
 }
 
+func (s *Session) log(level LogLevel, message string) {
+	m := &LogMessage{time.Now(), level, "go-libspotify", message}
+	select {
+	case s.logMessages <- m:
+	default:
+	}
+}
+
 func (s *Session) processEvents() {
 	var nextTimeoutMs C.int
 
@@ -741,6 +758,30 @@ func (s *Session) processEvents() {
 			if evt == eStop {
 				return
 			}
+		}
+	}
+}
+
+func (s *Session) processBackground() {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	for {
+		select {
+		case message := <-s.rawLogMessages:
+			m, err := parseLogMessage(message)
+			if m != nil {
+				select {
+				case s.logMessages <- m:
+				default:
+				}
+			}
+			if err != nil {
+				s.log(LogWarning, err.Error()+": "+message)
+			}
+		case <-s.stop:
+			// TODO flush all messages
+			break
 		}
 	}
 }
@@ -824,7 +865,7 @@ func (s *Session) cbPlayTokenLost() {
 
 func (s *Session) cbLogMessage(message string) {
 	select {
-	case s.logMessages <- message:
+	case s.rawLogMessages <- message:
 	default:
 	}
 }

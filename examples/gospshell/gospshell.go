@@ -134,7 +134,7 @@ func main() {
 
 		select {
 		case message := <-session.LogMessages():
-			println("!! log message", message)
+			println("!! log message", message.String())
 		case <-session.ConnectionStateUpdates():
 			println("!! connstate", session.ConnectionState())
 		case err := <-session.LoginUpdates():
