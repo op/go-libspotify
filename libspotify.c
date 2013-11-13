@@ -29,9 +29,9 @@ void set_callbacks(sp_session_callbacks *callbacks)
 	callbacks->end_of_track = cb_end_of_track;
 	callbacks->streaming_error = cb_streaming_error;
 	callbacks->userinfo_updated = cb_userinfo_updated;
-	callbacks->start_playback = cb_start_playback;
-	callbacks->stop_playback = cb_stop_playback;
-	callbacks->get_audio_buffer_stats = cb_get_audio_buffer_stats;
+	/* callbacks->start_playback = cb_start_playback; */
+	/* callbacks->stop_playback = cb_stop_playback; */
+	/* callbacks->get_audio_buffer_stats = cb_get_audio_buffer_stats; */
 	callbacks->offline_status_updated = cb_offline_status_updated;
 	callbacks->offline_error = cb_offline_error;
 	callbacks->credentials_blob_updated = cb_credentials_blob_updated;
