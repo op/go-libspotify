@@ -175,3 +175,29 @@ void SP_CALLCONV cb_toplistbrowse_complete(sp_toplistbrowse *toplist, void *user
 {
 	go_toplistbrowse_complete(toplist, userdata);
 }
+
+void set_playlistcontainer_callbacks(sp_playlistcontainer_callbacks *callbacks)
+{
+	callbacks->playlist_added = cb_playlistcontainer_playlist_added;
+	callbacks->container_loaded = cb_playlistcontainer_loaded;
+}
+
+void SP_CALLCONV cb_playlistcontainer_playlist_added(sp_playlistcontainer *pc, sp_playlist *playlist, int position, void *userdata)
+{
+	go_playlistcontainer_playlist_added(pc, playlist, position, userdata);
+}
+
+void SP_CALLCONV cb_playlistcontainer_loaded(sp_playlistcontainer *pc, void *userdata)
+{
+	go_playlistcontainer_loaded(pc, userdata);
+}
+
+void set_playlist_callbacks(sp_playlist_callbacks *callbacks)
+{
+	callbacks->playlist_state_changed = cb_playlist_state_changed;
+}
+
+void SP_CALLCONV cb_playlist_state_changed(sp_playlist *playlist, void *userdata)
+{
+	go_playlist_state_changed(playlist, userdata);
+}

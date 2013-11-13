@@ -144,6 +144,9 @@ type Session struct {
 	metadataUpdatesMu sync.Mutex
 	metadataUpdates   map[updatesListener]struct{}
 
+	userInfoUpdatesMu sync.Mutex
+	userInfoUpdates   map[updatesListener]struct{}
+
 	// rawLogMessages is the first place where all log messages ends up, and
 	// later once parsed they're moved to the logMessage channel which is
 	// exposed.
@@ -174,6 +177,7 @@ func NewSession(config *Config) (*Session, error) {
 		events: make(chan event, 1),
 
 		metadataUpdates: make(map[updatesListener]struct{}),
+		userInfoUpdates: make(map[updatesListener]struct{}),
 
 		rawLogMessages:   make(chan string, 128),
 		logMessages:      make(chan *LogMessage, 128),
@@ -479,6 +483,15 @@ func (s *Session) SetVolumeNormalization(normalize bool) {
 	C.sp_session_set_volume_normalization(s.sp_session, cbool(normalize))
 }
 
+func (s *Session) Playlists() (*PlaylistContainer, error) {
+	return newPlaylistContainer(s)
+}
+
+func (s *Session) Starred() *Playlist {
+	sp_playlist := C.sp_session_starred_create(s.sp_session)
+	return newPlaylist(s, sp_playlist, true)
+}
+
 func (s *Session) PrivateSession() bool {
 	return C.sp_session_is_private_session(s.sp_session) == 1
 }
@@ -728,6 +741,20 @@ func (s *Session) ParseLink(link string) (*Link, error) {
 	return newLink(s, sp_link, false), nil
 }
 
+// SetStarred is used to star/unstar a set of tracks.
+// func (s *Session) SetStarred(tracks []*Track, star bool) {
+// 	sp_tracks := (**C.sp_track)(C.malloc(C.size_t(len(tracks))))
+// 	defer C.free(unsafe.Pointer(sp_tracks))
+//
+// 	for i, track := range tracks {
+// 		sp_tracks[i] = track.sp_track
+// 	}
+//
+// 	C.sp_track_set_starred(
+// 		s.sp_session, sp_tracks, C.int(len(tracks)), cbool(star),
+// 	)
+// }
+
 func (s *Session) log(level LogLevel, message string) {
 	m := &LogMessage{time.Now(), level, "go-libspotify", message}
 	select {
@@ -786,8 +813,52 @@ func (s *Session) processBackground() {
 	}
 }
 
+type updatesListener interface {
+	cbUpdated()
+}
+
+func (s *Session) listenForMetadataUpdates(checkIfLoaded func() bool, l updatesListener) bool {
+	return s.listenForUpdates(&s.metadataUpdatesMu, s.metadataUpdates, checkIfLoaded, l)
+}
+
+func (s *Session) stopListenForMetadataUpdates(l updatesListener) {
+	s.stopListenForUpdates(&s.metadataUpdatesMu, s.metadataUpdates, l)
+}
+
+func (s *Session) listenForUserInfoUpdates(checkIfLoaded func() bool, l updatesListener) bool {
+	return s.listenForUpdates(&s.userInfoUpdatesMu, s.userInfoUpdates, checkIfLoaded, l)
+}
+
+func (s *Session) stopListenForUserInfoUpdates(l updatesListener) {
+	s.stopListenForUpdates(&s.userInfoUpdatesMu, s.userInfoUpdates, l)
+}
+
+func (s *Session) listenForUpdates(mu *sync.Mutex, m map[updatesListener]struct{}, checkIfLoaded func() bool, l updatesListener) bool {
+	var added bool
+	mu.Lock()
+	defer mu.Unlock()
+	if !checkIfLoaded() {
+		m[l] = struct{}{}
+		added = true
+	}
+	return added
+}
+
+func (s *Session) stopListenForUpdates(mu *sync.Mutex, m map[updatesListener]struct{}, l updatesListener) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(m, l)
+}
+
+func (s *Session) sendUpdates(mu *sync.Mutex, m map[updatesListener]struct{}) {
+	mu.Lock()
+	defer mu.Unlock()
+	for l := range m {
+		l.cbUpdated()
+	}
+}
+
 func (s *Session) cbLoggedIn(err error) {
-	println("logged in called", s, err)
 	select {
 	case s.loggedIn <- err:
 	default:
@@ -796,7 +867,6 @@ func (s *Session) cbLoggedIn(err error) {
 }
 
 func (s *Session) cbLoggedOut() {
-	println("logged out called", s)
 	select {
 	case s.loggedOut <- struct{}{}:
 	default:
@@ -804,33 +874,8 @@ func (s *Session) cbLoggedOut() {
 	}
 }
 
-type updatesListener interface {
-	cbUpdated()
-}
-
 func (s *Session) cbMetadataUpdated() {
-	s.metadataUpdatesMu.Lock()
-	defer s.metadataUpdatesMu.Unlock()
-	for l := range s.metadataUpdates {
-		l.cbUpdated()
-	}
-}
-
-func (s *Session) listenForMetadataUpdates(checkIfLoaded func() bool, l updatesListener) bool {
-	var added bool
-	s.metadataUpdatesMu.Lock()
-	defer s.metadataUpdatesMu.Unlock()
-	if !checkIfLoaded() {
-		s.metadataUpdates[l] = struct{}{}
-		added = true
-	}
-	return added
-}
-
-func (s *Session) stopListenForMetadataUpdates(l updatesListener) {
-	s.metadataUpdatesMu.Lock()
-	defer s.metadataUpdatesMu.Unlock()
-	delete(s.metadataUpdates, l)
+	s.sendUpdates(&s.metadataUpdatesMu, s.metadataUpdates)
 }
 
 func (s *Session) cbConnectionError(err error) {
@@ -879,7 +924,7 @@ func (s *Session) cbStreamingError(err error) {
 }
 
 func (s *Session) cbUserInfoUpdated() {
-	println("user info updated")
+	s.sendUpdates(&s.userInfoUpdatesMu, s.userInfoUpdates)
 }
 
 func (s *Session) cbStartPlayback() {
@@ -1113,6 +1158,192 @@ func (p *player) Prefetch(t *Track) error {
 	return spError(C.sp_session_player_prefetch(p.s.sp_session, t.sp_track))
 }
 
+type PlaylistType C.sp_playlist_type
+
+const (
+	// A normal playlist.
+	PlaylistTypePlaylist = PlaylistType(C.SP_PLAYLIST_TYPE_PLAYLIST)
+
+	// Marks a folder's starting point
+	PlaylistTypeStartFolder = PlaylistType(C.SP_PLAYLIST_TYPE_START_FOLDER)
+
+	// Marks previous folder's ending point
+	PlaylistTypeEndFolder = PlaylistType(C.SP_PLAYLIST_TYPE_END_FOLDER)
+
+	// Placeholder
+	PlaylistTypePlaceholder = PlaylistType(C.SP_PLAYLIST_TYPE_PLACEHOLDER)
+)
+
+type PlaylistContainer struct {
+	session *Session
+
+	sp_playlistcontainer *C.sp_playlistcontainer
+	callbacks            C.sp_playlistcontainer_callbacks
+
+	mu      sync.Mutex
+	folders map[uint64]*PlaylistFolder
+
+	wg     sync.WaitGroup
+	loaded chan struct{}
+}
+
+func newPlaylistContainer(s *Session) (*PlaylistContainer, error) {
+	pc := &PlaylistContainer{
+		session: s,
+		loaded:  make(chan struct{}, 1),
+		folders: make(map[uint64]*PlaylistFolder),
+	}
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+
+	pc.sp_playlistcontainer = C.sp_session_playlistcontainer(s.sp_session)
+	if pc.sp_playlistcontainer == nil {
+		return nil, errors.New("spotify: failed to get playlist container")
+	}
+
+	if pc.isLoaded() {
+		pc.loaded <- struct{}{}
+	} else {
+		pc.wg.Add(1)
+	}
+
+	C.sp_playlistcontainer_add_ref(pc.sp_playlistcontainer)
+	runtime.SetFinalizer(pc, (*PlaylistContainer).release)
+	C.set_playlistcontainer_callbacks(&pc.callbacks)
+	C.sp_playlistcontainer_add_callbacks(pc.sp_playlistcontainer, &pc.callbacks, unsafe.Pointer(pc))
+
+	return pc, nil
+}
+
+func (pc *PlaylistContainer) release() {
+	if pc.sp_playlistcontainer == nil {
+		panic("spotify: playlist container object has no sp_playlistcontainer object")
+	}
+	C.sp_playlistcontainer_remove_callbacks(pc.sp_playlistcontainer, &pc.callbacks, unsafe.Pointer(pc))
+	C.sp_playlistcontainer_release(pc.sp_playlistcontainer)
+	pc.sp_playlistcontainer = nil
+}
+
+func (pc *PlaylistContainer) Owner() (*User, error) {
+	sp_user := C.sp_playlistcontainer_owner(pc.sp_playlistcontainer)
+	if sp_user == nil {
+		return nil, errors.New("spotify: unknown user")
+	}
+	return newUser(pc.session, sp_user), nil
+}
+
+// TODO rename to Entries?
+func (pc *PlaylistContainer) Playlists() int {
+	return int(C.sp_playlistcontainer_num_playlists(pc.sp_playlistcontainer))
+}
+
+// TODO rename to EntryType?
+func (pc *PlaylistContainer) PlaylistType(n int) PlaylistType {
+	if n < 0 || n >= pc.Playlists() {
+		panic("spotify: playlist out of range")
+	}
+	return PlaylistType(C.sp_playlistcontainer_playlist_type(pc.sp_playlistcontainer, C.int(n)))
+}
+
+func (pc *PlaylistContainer) Folder(n int) (*PlaylistFolder, error) {
+	// if pc.PlaylistType(n) != PlaylistTypeStartFolder
+	folderId := uint64(C.sp_playlistcontainer_playlist_folder_id(pc.sp_playlistcontainer, C.int(n)))
+	if folderId == 0 {
+		return nil, errors.New("spotify: not a folder")
+	}
+
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	if f := pc.folders[folderId]; f != nil {
+		return f, nil
+	}
+
+	f := newPlaylistFolder(pc, n, folderId)
+	pc.folders[folderId] = f
+	return f, nil
+}
+
+func (pc *PlaylistContainer) Playlist(n int) *Playlist {
+	var sp_playlist *C.sp_playlist
+	switch pc.PlaylistType(n) {
+	case PlaylistTypePlaceholder:
+		fallthrough
+	case PlaylistTypePlaylist:
+		sp_playlist = C.sp_playlistcontainer_playlist(pc.sp_playlistcontainer, C.int(n))
+	default:
+		panic("spotify: index does not hold a playlist entry")
+	}
+	return newPlaylist(pc.session, sp_playlist, false)
+}
+
+func (pc *PlaylistContainer) isLoaded() bool {
+	return C.sp_playlistcontainer_is_loaded(pc.sp_playlistcontainer) == 1
+}
+
+func (pc *PlaylistContainer) Wait() {
+	pc.wg.Wait()
+}
+
+func (pc *PlaylistContainer) cbLoaded() {
+	println("playlist container loaded")
+	select {
+	case pc.loaded <- struct{}{}:
+		pc.wg.Done()
+	}
+}
+
+//export go_playlistcontainer_playlist_added
+func go_playlistcontainer_playlist_added(sp_playlistcontainer unsafe.Pointer, sp_playlist unsafe.Pointer, position C.int, userdata unsafe.Pointer) {
+	println("playlist container playlist added")
+}
+
+//export go_playlistcontainer_loaded
+func go_playlistcontainer_loaded(sp_playlistcontainer unsafe.Pointer, userdata unsafe.Pointer) {
+	// playlistContainerCall(spSession, (*PlaylistContainer).cbLoaded)
+	println("playlistcontainer loaded")
+	(*PlaylistContainer)(userdata).cbLoaded()
+}
+
+type PlaylistFolder struct {
+	pc    *PlaylistContainer
+	index int
+	id    uint64
+
+	mu   sync.Mutex
+	name string
+}
+
+func newPlaylistFolder(pc *PlaylistContainer, n int, id uint64) *PlaylistFolder {
+	return &PlaylistFolder{pc: pc, index: n, id: id}
+}
+
+func (pf *PlaylistFolder) Id() uint64 {
+	return pf.id
+}
+
+func (pf *PlaylistFolder) Name() string {
+	pf.mu.Lock()
+	defer pf.mu.Unlock()
+	if pf.name == "" {
+		const bufSize = 256
+		buf := (*C.char)(C.malloc(bufSize))
+		if buf == nil {
+			panic("spotify: failed to allocate buffer")
+		}
+		defer C.free(unsafe.Pointer(buf))
+
+		rc := C.sp_playlistcontainer_playlist_folder_name(
+			pf.pc.sp_playlistcontainer, C.int(pf.index),
+			buf, 256,
+		)
+		if rc != C.SP_ERROR_OK {
+			panic("spotify: folder is no longer in range")
+		}
+		pf.name = C.GoString(buf)
+	}
+	return pf.name
+}
+
 type LinkType C.sp_linktype
 
 const (
@@ -1207,7 +1438,16 @@ func (l *Link) Artist() (*Artist, error) {
 	return newArtist(l.session, C.sp_link_as_artist(l.sp_link)), nil
 }
 
-func (l Link) User() (*User, error) {
+func (l *Link) Playlist() (*Playlist, error) {
+	if l.Type() != LinkTypePlaylist {
+		return nil, errors.New("spotify: link is not a playlist")
+	}
+
+	sp_playlist := C.sp_playlist_create(l.session.sp_session, l.sp_link)
+	return newPlaylist(l.session, sp_playlist, true), nil
+}
+
+func (l *Link) User() (*User, error) {
 	if l.Type() != LinkTypeUser {
 		return nil, errors.New("spotify: link is not for a user")
 	}
@@ -1725,13 +1965,20 @@ const (
 type User struct {
 	session *Session
 	sp_user *C.sp_user
+
+	wg sync.WaitGroup
 }
 
-func newUser(session *Session, sp_user *C.sp_user) *User {
+func newUser(s *Session, sp_user *C.sp_user) *User {
 	C.sp_user_add_ref(sp_user)
-	user := &User{session, sp_user}
+	user := &User{session: s, sp_user: sp_user}
 	// TODO make an inteface with release and some convenient func
 	runtime.SetFinalizer(user, (*User).release)
+
+	if s.listenForUserInfoUpdates(user.isLoaded, user) {
+		user.wg.Add(1)
+	}
+
 	return user
 }
 
@@ -1743,14 +1990,15 @@ func (u *User) release() {
 	u.sp_user = nil
 }
 
-func (u *User) Wait() {
-	// TODO hook into the callback/event system
-	for {
-		if u.isLoaded() {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+func (u *User) cbUpdated() {
+	if u.isLoaded() {
+		u.wg.Done()
 	}
+}
+
+func (u *User) Wait() {
+	u.wg.Wait()
+	u.session.stopListenForUserInfoUpdates(u)
 }
 
 func (u *User) isLoaded() bool {
@@ -1780,6 +2028,236 @@ func (u *User) TracksToplist() *TracksToplist {
 // DisplayName returns the user's displayable username.
 func (u *User) DisplayName() string {
 	return C.GoString(C.sp_user_display_name(u.sp_user))
+}
+
+func (u *User) Starred() *Playlist {
+	cuser := C.CString(u.CanonicalName())
+	defer C.free(unsafe.Pointer(cuser))
+	sp_playlist := C.sp_session_starred_for_user_create(u.session.sp_session, cuser)
+	return newPlaylist(u.session, sp_playlist, true)
+}
+
+type Playlist struct {
+	session     *Session
+	sp_playlist *C.sp_playlist
+	callbacks   C.sp_playlist_callbacks
+	refOwned    bool
+
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	loaded chan struct{}
+}
+
+func newPlaylist(s *Session, sp_playlist *C.sp_playlist, refOwned bool) *Playlist {
+	// TODO register all callbacks
+	p := &Playlist{
+		session:     s,
+		sp_playlist: sp_playlist,
+		refOwned:    refOwned,
+		loaded:      make(chan struct{}, 1),
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	runtime.SetFinalizer(p, (*Playlist).release)
+	C.set_playlist_callbacks(&p.callbacks)
+	C.sp_playlist_add_callbacks(sp_playlist, &p.callbacks, unsafe.Pointer(p))
+
+	// TODO make a nice interface and expose channel
+	if p.isLoaded() {
+		p.loaded <- struct{}{}
+	} else {
+		p.wg.Add(1)
+	}
+
+	return p
+}
+
+func (p *Playlist) release() {
+	if p.sp_playlist == nil {
+		panic("spotify: playlist object has no sp_playlist object")
+	}
+	C.sp_playlist_remove_callbacks(p.sp_playlist, &p.callbacks, unsafe.Pointer(p))
+	if p.refOwned {
+		C.sp_playlist_release(p.sp_playlist)
+	}
+	p.sp_playlist = nil
+}
+
+func (p *Playlist) isLoaded() bool {
+	return C.sp_playlist_is_loaded(p.sp_playlist) == 1
+}
+
+func (p *Playlist) cbStateChanged() {
+	if p.isLoaded() {
+		select {
+		case p.loaded <- struct{}{}:
+			p.wg.Done()
+		}
+	}
+}
+
+//export go_playlist_state_changed
+func go_playlist_state_changed(sp_playlist unsafe.Pointer, userdata unsafe.Pointer) {
+	(*Playlist)(userdata).cbStateChanged()
+}
+
+func (p *Playlist) Wait() {
+	p.wg.Wait()
+}
+
+func (p *Playlist) Link() *Link {
+	sp_link := C.sp_link_create_from_playlist(p.sp_playlist)
+	return newLink(p.session, sp_link, false)
+}
+
+func (p *Playlist) Name() string {
+	return C.GoString(C.sp_playlist_name(p.sp_playlist))
+}
+
+func (p *Playlist) SetName(n string) error {
+	cname := C.CString(n)
+	defer C.free(unsafe.Pointer(cname))
+	rc := C.sp_playlist_rename(p.sp_playlist, cname)
+	if rc != C.SP_ERROR_OK {
+		return spError(rc)
+	}
+	return nil
+}
+
+func (p *Playlist) Owner() (*User, error) {
+	sp_user := C.sp_playlist_owner(p.sp_playlist)
+	if sp_user == nil {
+		return nil, errors.New("spotify: unknown user")
+	}
+	return newUser(p.session, sp_user), nil
+}
+
+func (p *Playlist) Tracks() int {
+	return int(C.sp_playlist_num_tracks(p.sp_playlist))
+}
+
+func (p *Playlist) Track(n int) *playlistTrack {
+	if n < 0 || n >= p.Tracks() {
+		panic("spotify: playlist track out of range")
+	}
+	// TODO hook into the playlist to know when the index changes etc?
+	return &playlistTrack{p, n}
+}
+
+func (p *Playlist) Collaborative() bool {
+	return C.sp_playlist_is_collaborative(p.sp_playlist) == 1
+}
+
+func (p *Playlist) SetCollaborative(c bool) {
+	C.sp_playlist_set_collaborative(p.sp_playlist, cbool(c))
+}
+
+// SetAutolinkTracks sets the autolinking state for a playlist.
+//
+// If a playlist is autolinked, unplayable tracks will be made playable by
+// linking them to other Spotify tracks, where possible.
+func (p *Playlist) SetAutolinkTracks(l bool) {
+	C.sp_playlist_set_autolink_tracks(p.sp_playlist, cbool(l))
+}
+
+func (p *Playlist) Description() string {
+	return C.GoString(C.sp_playlist_get_description(p.sp_playlist))
+}
+
+// TODO sp_playlist_get_image
+
+func (p *Playlist) HasPendingChanges() bool {
+	return C.sp_playlist_has_pending_changes(p.sp_playlist) == 1
+}
+
+// TODO sp_playlist_add_tracks
+// TODO sp_playlist_remove_tracks
+// TODO sp_playlist_reorder_tracks
+
+func (p *Playlist) NumSubscribers() int {
+	return int(C.sp_playlist_num_subscribers(p.sp_playlist))
+}
+
+// TODO sp_playlist_subscribers
+
+func (p *Playlist) InMemory() bool {
+	return C.sp_playlist_is_in_ram(p.session.sp_session, p.sp_playlist) == 1
+}
+
+func (p *Playlist) LoadInMemory(m bool) {
+	C.sp_playlist_set_in_ram(p.session.sp_session, p.sp_playlist, cbool(m))
+}
+
+func (p *Playlist) SetOffline(o bool) {
+	C.sp_playlist_set_offline_mode(p.session.sp_session, p.sp_playlist, cbool(o))
+}
+
+func (p *Playlist) Offline() PlaylistOfflineStatus {
+	s := C.sp_playlist_get_offline_status(p.session.sp_session, p.sp_playlist)
+	return PlaylistOfflineStatus(s)
+}
+
+type PlaylistOfflineStatus C.sp_playlist_offline_status
+
+const (
+	// Playlist is not offline enabled
+	PlaylistOfflineStatusNo = PlaylistOfflineStatus(C.SP_PLAYLIST_OFFLINE_STATUS_NO)
+	// Playlist is synchronized to local storage
+	PlaylistOfflineStatusYes = PlaylistOfflineStatus(C.SP_PLAYLIST_OFFLINE_STATUS_YES)
+	// This playlist is currently downloading. Only one playlist can be in this state any given time
+	PlaylistOfflineStatusDownloading = PlaylistOfflineStatus(C.SP_PLAYLIST_OFFLINE_STATUS_DOWNLOADING)
+	// Playlist is queued for download
+	PlaylistOfflineStatusWaiting = PlaylistOfflineStatus(C.SP_PLAYLIST_OFFLINE_STATUS_WAITING)
+)
+
+type playlistTrack struct {
+	playlist *Playlist
+	index    int
+}
+
+// User returns the user that added the track to the playlist.
+func (pt *playlistTrack) User() *User {
+	sp_user := C.sp_playlist_track_creator(pt.playlist.sp_playlist, C.int(pt.index))
+	return newUser(pt.playlist.session, sp_user)
+}
+
+// Time returns the time when the track was added to the playlist.
+func (pt *playlistTrack) Time() time.Time {
+	t := C.sp_playlist_track_create_time(pt.playlist.sp_playlist, C.int(pt.index))
+	return time.Unix(int64(t), 0)
+}
+
+// Track returns the track metadata object for the playlist entry.
+func (pt *playlistTrack) Track() *Track {
+	// TODO return PlaylistTrack and add extra functionality on top of that
+	sp_track := C.sp_playlist_track(pt.playlist.sp_playlist, C.int(pt.index))
+	return newTrack(pt.playlist.session, sp_track)
+}
+
+// Seen returns true if the entry has been marked as seen or not.
+func (pt *playlistTrack) Seen() bool {
+	seen := C.sp_playlist_track_seen(pt.playlist.sp_playlist, C.int(pt.index))
+	return seen == 1
+}
+
+// SetSeen marks the playlist track item as seen or not.
+func (pt *playlistTrack) SetSeen(seen bool) error {
+	rc := C.sp_playlist_track_set_seen(pt.playlist.sp_playlist, C.int(pt.index), cbool(seen))
+	if rc != C.SP_ERROR_OK {
+		return spError(rc)
+	}
+	return nil
+}
+
+// Message returns the message attached to a playlist item. Typically used on inbox.
+// TODO only expose this for inbox?
+func (pt *playlistTrack) Message() string {
+	cmsg := C.sp_playlist_track_message(pt.playlist.sp_playlist, C.int(pt.index))
+	if cmsg == nil {
+		return ""
+	}
+	return C.GoString(cmsg)
 }
 
 type toplistType C.sp_toplisttype

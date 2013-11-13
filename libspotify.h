@@ -47,4 +47,11 @@ void SP_CALLCONV cb_search_complete(sp_search *search, void *userdata);
 sp_toplistbrowse* toplistbrowse_create(sp_session *session, sp_toplisttype type, sp_toplistregion region, const char *username, void *userdata);
 void SP_CALLCONV cb_toplistbrowse_complete(sp_toplistbrowse *toplist, void *userdata);
 
+void set_playlistcontainer_callbacks(sp_playlistcontainer_callbacks*);
+void SP_CALLCONV cb_playlistcontainer_playlist_added(sp_playlistcontainer *pc, sp_playlist *playlist, int position, void *userdata);
+void SP_CALLCONV cb_playlistcontainer_loaded(sp_playlistcontainer *pc, void *userdata);
+
+void set_playlist_callbacks(sp_playlist_callbacks*);
+void SP_CALLCONV cb_playlist_state_changed(sp_playlist *playlist, void *userdata);
+
 #endif // __GO_LIBSPOTIFY_H
