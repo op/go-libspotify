@@ -29,7 +29,7 @@ import (
 	"strings"
 	"time"
 
-	sp "github.com/op/go-libspotify"
+	sp "github.com/op/go-libspotify/spotify"
 )
 
 var (

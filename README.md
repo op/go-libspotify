@@ -10,16 +10,16 @@ This is a work in progress. Expect this API to change. Patches are welcome.
 
 ### Using *go get*
 
-    $ go get github.com/op/go-libspotify
+    $ go get github.com/op/go-libspotify/spotify
 
-After this command *go-libspotify* is ready to use. Its source will be in:
+After this command *spotify* is ready to use. Its source will be in:
 
-    $GOPATH/src/pkg/github.com/op/go-libspotify
+    $GOPATH/src/pkg/github.com/op/go-libspotify/spotify
 
 You can use `go get -u -a` to update all installed packages.
 
 ## Documentation
 
-For docs, see http://godoc.org/github.com/op/go-libspotify or run:
+For docs, see http://godoc.org/github.com/op/go-libspotify/spotify or run:
 
-    $ go doc github.com/op/go-libspotify
+    $ go doc github.com/op/go-libspotify/spotify

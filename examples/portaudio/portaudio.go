@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"code.google.com/p/portaudio-go/portaudio"
-	"github.com/op/go-libspotify"
+	"github.com/op/go-libspotify/spotify"
 )
 
 var (
