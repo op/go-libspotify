@@ -2168,12 +2168,12 @@ func (p *Playlist) Tracks() int {
 	return int(C.sp_playlist_num_tracks(p.sp_playlist))
 }
 
-func (p *Playlist) Track(n int) *playlistTrack {
+func (p *Playlist) Track(n int) *PlaylistTrack {
 	if n < 0 || n >= p.Tracks() {
 		panic("spotify: playlist track out of range")
 	}
 	// TODO hook into the playlist to know when the index changes etc?
-	return &playlistTrack{p, n}
+	return &PlaylistTrack{p, n}
 }
 
 func (p *Playlist) Collaborative() bool {
@@ -2242,38 +2242,38 @@ const (
 	PlaylistOfflineStatusWaiting = PlaylistOfflineStatus(C.SP_PLAYLIST_OFFLINE_STATUS_WAITING)
 )
 
-type playlistTrack struct {
+type PlaylistTrack struct {
 	playlist *Playlist
 	index    int
 }
 
 // User returns the user that added the track to the playlist.
-func (pt *playlistTrack) User() *User {
+func (pt *PlaylistTrack) User() *User {
 	sp_user := C.sp_playlist_track_creator(pt.playlist.sp_playlist, C.int(pt.index))
 	return newUser(pt.playlist.session, sp_user)
 }
 
 // Time returns the time when the track was added to the playlist.
-func (pt *playlistTrack) Time() time.Time {
+func (pt *PlaylistTrack) Time() time.Time {
 	t := C.sp_playlist_track_create_time(pt.playlist.sp_playlist, C.int(pt.index))
 	return time.Unix(int64(t), 0)
 }
 
 // Track returns the track metadata object for the playlist entry.
-func (pt *playlistTrack) Track() *Track {
+func (pt *PlaylistTrack) Track() *Track {
 	// TODO return PlaylistTrack and add extra functionality on top of that
 	sp_track := C.sp_playlist_track(pt.playlist.sp_playlist, C.int(pt.index))
 	return newTrack(pt.playlist.session, sp_track)
 }
 
 // Seen returns true if the entry has been marked as seen or not.
-func (pt *playlistTrack) Seen() bool {
+func (pt *PlaylistTrack) Seen() bool {
 	seen := C.sp_playlist_track_seen(pt.playlist.sp_playlist, C.int(pt.index))
 	return seen == 1
 }
 
 // SetSeen marks the playlist track item as seen or not.
-func (pt *playlistTrack) SetSeen(seen bool) error {
+func (pt *PlaylistTrack) SetSeen(seen bool) error {
 	rc := C.sp_playlist_track_set_seen(pt.playlist.sp_playlist, C.int(pt.index), cbool(seen))
 	if rc != C.SP_ERROR_OK {
 		return spError(rc)
@@ -2283,7 +2283,7 @@ func (pt *playlistTrack) SetSeen(seen bool) error {
 
 // Message returns the message attached to a playlist item. Typically used on inbox.
 // TODO only expose this for inbox?
-func (pt *playlistTrack) Message() string {
+func (pt *PlaylistTrack) Message() string {
 	cmsg := C.sp_playlist_track_message(pt.playlist.sp_playlist, C.int(pt.index))
 	if cmsg == nil {
 		return ""
