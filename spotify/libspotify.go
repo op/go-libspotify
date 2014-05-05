@@ -436,8 +436,8 @@ func (s *Session) SetCacheSize(size int) {
 	C.sp_session_set_cache_size(s.sp_session, C.size_t(size))
 }
 
-func (s *Session) Player() *player {
-	return &player{s}
+func (s *Session) Player() *Player {
+	return &Player{s}
 }
 
 type Bitrate C.sp_bitrate
@@ -1160,32 +1160,32 @@ type AudioConsumer interface {
 	WriteAudio(AudioFormat, []byte) int
 }
 
-type player struct {
+type Player struct {
 	s *Session
 }
 
-func (p *player) Load(t *Track) error {
+func (p *Player) Load(t *Track) error {
 	return spError(C.sp_session_player_load(p.s.sp_session, t.sp_track))
 }
 
-func (p *player) Seek(offset time.Duration) {
+func (p *Player) Seek(offset time.Duration) {
 	ms := C.int(offset / time.Millisecond)
 	C.sp_session_player_seek(p.s.sp_session, ms)
 }
 
-func (p *player) Play() {
+func (p *Player) Play() {
 	C.sp_session_player_play(p.s.sp_session, 1)
 }
 
-func (p *player) Pause() {
+func (p *Player) Pause() {
 	C.sp_session_player_play(p.s.sp_session, 1)
 }
 
-func (p *player) Unload() {
+func (p *Player) Unload() {
 	C.sp_session_player_unload(p.s.sp_session)
 }
 
-func (p *player) Prefetch(t *Track) error {
+func (p *Player) Prefetch(t *Track) error {
 	return spError(C.sp_session_player_prefetch(p.s.sp_session, t.sp_track))
 }
 
