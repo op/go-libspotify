@@ -1178,7 +1178,7 @@ func (p *Player) Play() {
 }
 
 func (p *Player) Pause() {
-	C.sp_session_player_play(p.s.sp_session, 1)
+	C.sp_session_player_play(p.s.sp_session, 0)
 }
 
 func (p *Player) Unload() {
