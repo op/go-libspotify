@@ -161,6 +161,7 @@ type Session struct {
 	states           chan struct{}
 	loggedIn         chan error
 	loggedOut        chan struct{}
+	endOfTrack       chan struct{}
 
 	wg      sync.WaitGroup
 	stop    chan struct{}
@@ -189,6 +190,7 @@ func NewSession(config *Config) (*Session, error) {
 		states:           make(chan struct{}, 1),
 		loggedIn:         make(chan error, 1),
 		loggedOut:        make(chan struct{}, 1),
+		endOfTrack:       make(chan struct{}, 1),
 
 		audioConsumer: config.AudioConsumer,
 	}
@@ -697,6 +699,12 @@ func (s *Session) ConnectionStateUpdates() <-chan struct{} {
 	return s.states
 }
 
+// EndOfTrackUpdates returns a channel used to get updates
+// when a track ends playing
+func (s *Session) EndOfTrackUpdates() <-chan struct{} {
+	return s.endOfTrack
+}
+
 // LoginUpdates returns a channel used to get notified when the
 // session has been logged in.
 func (s *Session) LoginUpdates() <-chan error {
@@ -935,7 +943,10 @@ func (s *Session) cbLogMessage(message string) {
 }
 
 func (s *Session) cbEndOfTrack() {
-	println("end of track")
+	select {
+	case s.endOfTrack <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Session) cbStreamingError(err error) {
