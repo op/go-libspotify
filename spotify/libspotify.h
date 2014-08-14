@@ -54,4 +54,7 @@ void SP_CALLCONV cb_playlistcontainer_loaded(sp_playlistcontainer *pc, void *use
 void set_playlist_callbacks(sp_playlist_callbacks*);
 void SP_CALLCONV cb_playlist_state_changed(sp_playlist *playlist, void *userdata);
 
+void set_image_callback(sp_image *image, void *userdata);
+void SP_CALLCONV cb_image_complete(sp_image *image, void *userdata);
+
 #endif // __GO_LIBSPOTIFY_H
