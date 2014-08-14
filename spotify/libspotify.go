@@ -2473,7 +2473,7 @@ func newToplist(s *Session, ttype toplistType, r ToplistRegion, user *User) *top
 		C.sp_toplisttype(ttype),
 		C.sp_toplistregion(r),
 		cusername,
-		unsafe.Pointer(&t),
+		unsafe.Pointer(t),
 	)
 	runtime.SetFinalizer(t, (*toplist).release)
 	return t
