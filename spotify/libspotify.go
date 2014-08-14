@@ -27,6 +27,7 @@ import "C"
 import (
 	"errors"
 	"net/url"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -1156,6 +1157,12 @@ func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.
 	t.cbComplete()
 }
 
+//export go_image_complete
+func go_image_complete(spImage unsafe.Pointer, userdata unsafe.Pointer) {
+	i := (*Image)(userdata)
+	i.cbComplete()
+}
+
 // AudioConsumer is the interface used to deliver music. The data delivered
 // will be available as []byte and the format contains information about it.
 type AudioConsumer interface {
@@ -1485,6 +1492,15 @@ func (l *Link) User() (*User, error) {
 		return nil, errors.New("spotify: link is not for a user")
 	}
 	return newUser(l.session, C.sp_link_as_user(l.sp_link)), nil
+}
+
+func (l *Link) Image() (*Image, error) {
+	if l.Type() != LinkTypeImage {
+		return nil, errors.New("spotify: link is not for an image")
+	}
+
+	sp_image := C.sp_image_create_from_link(l.session.sp_session, l.sp_link)
+	return newImage(l.session, sp_image), nil
 }
 
 type search struct {
@@ -1903,8 +1919,20 @@ func (a *Album) Artist() *Artist {
 	return newArtist(a.session, C.sp_album_artist(a.sp_album))
 }
 
-// TODO sp_album_cover
-// TODO sp_link_create_from_album_cover
+func (a *Album) CoverLink(size ImageSize) *Link {
+	sp_link := C.sp_link_create_from_album_cover(a.sp_album,
+		C.sp_image_size(size))
+	return newLink(a.session, sp_link, false)
+}
+
+func (a *Album) Cover(size ImageSize) *Image {
+	if id := C.sp_album_cover(a.sp_album, C.sp_image_size(size)); id != nil {
+		sp_image := C.sp_image_create(a.session.sp_session, id)
+		return newImage(a.session, sp_image)
+	}
+
+	return nil
+}
 
 // Name returns the name of the album.
 func (a *Album) Name() string {
@@ -1979,8 +2007,23 @@ func (a *Artist) Name() string {
 	return C.GoString(C.sp_artist_name(a.sp_artist))
 }
 
-// TODO sp_artist_portrait
-// TODO sp_link_create_from_artist_portrait
+func (a *Artist) PortraitLink(size ImageSize) *Link {
+	if sp_link := C.sp_link_create_from_artist_portrait(a.sp_artist,
+		C.sp_image_size(size)); sp_link != nil {
+		return newLink(a.session, sp_link, false)
+	}
+
+	return nil
+}
+
+func (a *Artist) Portrait(size ImageSize) *Image {
+	if id := C.sp_artist_portrait(a.sp_artist, C.sp_image_size(size)); id != nil {
+		sp_image := C.sp_image_create(a.session.sp_session, id)
+		return newImage(a.session, sp_image)
+	}
+
+	return nil
+}
 
 type RelationType C.sp_relation_type
 
@@ -2471,6 +2514,96 @@ func (tt *TracksToplist) Track(n int) *Track {
 	}
 	sp_track := C.sp_toplistbrowse_track(tt.sp_toplistbrowse, C.int(n))
 	return newTrack(tt.session, sp_track)
+}
+
+type ImageSize C.sp_image_size
+
+const (
+	// Normal image size
+	ImageSizeNormal = ImageSize(C.SP_IMAGE_SIZE_NORMAL)
+
+	// Small image size
+	ImageSizeSmall = ImageSize(C.SP_IMAGE_SIZE_SMALL)
+
+	// Large image size
+	ImageSizeLarge = ImageSize(C.SP_IMAGE_SIZE_LARGE)
+)
+
+type ImageFormat C.sp_imageformat
+
+const (
+	// Unknown image format
+	ImageFormatUnknown = ImageFormat(C.SP_IMAGE_FORMAT_UNKNOWN)
+
+	// JPEG image
+	ImageFormatJpeg = ImageFormat(C.SP_IMAGE_FORMAT_JPEG)
+)
+
+type Image struct {
+	session  *Session
+	sp_image *C.sp_image
+	wg       sync.WaitGroup
+}
+
+func newImage(s *Session, sp_image *C.sp_image) *Image {
+	C.sp_image_add_ref(sp_image)
+	i := &Image{session: s, sp_image: sp_image}
+	runtime.SetFinalizer(i, (*Image).release)
+
+	i.wg.Add(1)
+	C.set_image_callback(sp_image, unsafe.Pointer(i))
+
+	return i
+}
+
+func (i *Image) release() {
+	if i.sp_image == nil {
+		panic("spotify: image object has no sp_image object")
+	}
+
+	C.sp_image_release(i.sp_image)
+	i.sp_image = nil
+}
+
+func (i *Image) cbComplete() {
+	if i.isLoaded() {
+		i.wg.Done()
+	}
+}
+
+func (i *Image) Wait() {
+	i.wg.Wait()
+	if !i.isLoaded() {
+		panic("spotify: image is not loaded")
+	}
+}
+
+func (i *Image) isLoaded() bool {
+	return C.sp_image_is_loaded(i.sp_image) == 1
+}
+
+// Error returns an error associated with an image.
+func (i *Image) Error() error {
+	return spError(C.sp_image_error(i.sp_image))
+}
+
+// Data returns the image data.
+func (i *Image) Data() []byte {
+	var size C.size_t
+	var data unsafe.Pointer = C.sp_image_data(i.sp_image, &size)
+
+	hdr := reflect.SliceHeader{
+		Data: uintptr(data),
+		Len:  int(size),
+		Cap:  int(size),
+	}
+
+	return *(*[]byte)(unsafe.Pointer(&hdr))
+}
+
+// Format returns the image format.
+func (i *Image) Format() ImageFormat {
+	return ImageFormat(C.sp_image_format(i.sp_image))
 }
 
 // BuildId returns the libspotify build ID.
