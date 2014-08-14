@@ -1153,16 +1153,7 @@ func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
 func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.Pointer) {
 	// TODO find a nicer way to do this
 	t := (*toplist)(userdata)
-	switch t.ttype {
-	case toplistTypeArtists:
-		((*ArtistsToplist)(userdata)).cbComplete()
-	case toplistTypeAlbums:
-		((*AlbumsToplist)(userdata)).cbComplete()
-	case toplistTypeTracks:
-		((*TracksToplist)(userdata)).cbComplete()
-	default:
-		panic("spotify: unhandled toplist type")
-	}
+	t.cbComplete()
 }
 
 // AudioConsumer is the interface used to deliver music. The data delivered
@@ -2377,7 +2368,7 @@ func newToplist(s *Session, ttype toplistType, r ToplistRegion, user *User) *top
 		C.sp_toplisttype(ttype),
 		C.sp_toplistregion(r),
 		cusername,
-		unsafe.Pointer(&t),
+		unsafe.Pointer(t),
 	)
 	runtime.SetFinalizer(t, (*toplist).release)
 	return t
