@@ -25,6 +25,7 @@ package spotify
 import "C"
 
 import (
+	"bytes"
 	"errors"
 	"net/url"
 	"reflect"
@@ -1626,7 +1627,34 @@ func (s *search) TotalPlaylists() int {
 	return int(C.sp_search_total_playlists(s.sp_search))
 }
 
-// TODO sp_search_playlist
+func (s *search) Playlist(n int) *Playlist {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	sp_playlist := C.sp_search_playlist(s.sp_search, C.int(n))
+	return newPlaylist(s.session, sp_playlist, true)
+}
+
+func (s *search) PlaylistName(n int) string {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	return C.GoString(C.sp_search_playlist_name(s.sp_search, C.int(n)))
+}
+
+func (s *search) PlaylistUri(n int) string {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	return C.GoString(C.sp_search_playlist_uri(s.sp_search, C.int(n)))
+}
+
+func (s *search) PlaylistImageUri(n int) string {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	return C.GoString(C.sp_search_playlist_image_uri(s.sp_search, C.int(n)))
+}
 
 type Track struct {
 	session  *Session
@@ -2241,7 +2269,15 @@ func (p *Playlist) Description() string {
 	return C.GoString(C.sp_playlist_get_description(p.sp_playlist))
 }
 
-// TODO sp_playlist_get_image
+func (p *Playlist) Image() *Image {
+	id := make([]byte, 20)
+	if C.sp_playlist_get_image(p.sp_playlist,
+		(*C.byte)(&id[0])) == 0 {
+		return nil
+	}
+	sp_image := C.sp_image_create(p.session.sp_session, (*C.byte)(&id[0]))
+	return newImage(p.session, sp_image)
+}
 
 func (p *Playlist) HasPendingChanges() bool {
 	return C.sp_playlist_has_pending_changes(p.sp_playlist) == 1
