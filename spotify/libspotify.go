@@ -1436,6 +1436,9 @@ func (l *Link) release() {
 func (l *Link) String() string {
 	// Determine how big string we need and get the string out.
 	size := C.sp_link_as_string(l.sp_link, nil, 0)
+	if C.size_t(size) == 0 {
+		return ""
+	}
 	buf := (*C.char)(C.malloc(C.size_t(size) + 1))
 	if buf == nil {
 		return "<invalid>"
@@ -1947,9 +1950,12 @@ func (a *Album) Artist() *Artist {
 }
 
 func (a *Album) CoverLink(size ImageSize) *Link {
-	sp_link := C.sp_link_create_from_album_cover(a.sp_album,
-		C.sp_image_size(size))
-	return newLink(a.session, sp_link, false)
+	if sp_link := C.sp_link_create_from_album_cover(a.sp_album,
+		C.sp_image_size(size)); sp_link != nil {
+		return newLink(a.session, sp_link, false)
+	}
+
+	return nil
 }
 
 func (a *Album) Cover(size ImageSize) *Image {
