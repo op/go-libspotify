@@ -25,7 +25,6 @@ package spotify
 import "C"
 
 import (
-	"bytes"
 	"errors"
 	"net/url"
 	"reflect"
