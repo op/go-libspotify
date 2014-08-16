@@ -158,11 +158,12 @@ type Session struct {
 	rawLogMessages chan string
 	logMessages    chan *LogMessage
 
-	credentialsBlobs chan []byte
-	states           chan struct{}
-	loggedIn         chan error
-	loggedOut        chan struct{}
-	endOfTrack       chan struct{}
+	credentialsBlobs   chan []byte
+	states             chan struct{}
+	loggedIn           chan error
+	loggedOut          chan struct{}
+	endOfTrack         chan struct{}
+	privateSessionMode chan bool
 
 	wg      sync.WaitGroup
 	stop    chan struct{}
@@ -185,13 +186,14 @@ func NewSession(config *Config) (*Session, error) {
 		metadataUpdates: make(map[updatesListener]struct{}),
 		userInfoUpdates: make(map[updatesListener]struct{}),
 
-		rawLogMessages:   make(chan string, 128),
-		logMessages:      make(chan *LogMessage, 128),
-		credentialsBlobs: make(chan []byte, 1),
-		states:           make(chan struct{}, 1),
-		loggedIn:         make(chan error, 1),
-		loggedOut:        make(chan struct{}, 1),
-		endOfTrack:       make(chan struct{}, 1),
+		rawLogMessages:     make(chan string, 128),
+		logMessages:        make(chan *LogMessage, 128),
+		credentialsBlobs:   make(chan []byte, 1),
+		states:             make(chan struct{}, 1),
+		loggedIn:           make(chan error, 1),
+		loggedOut:          make(chan struct{}, 1),
+		endOfTrack:         make(chan struct{}, 1),
+		privateSessionMode: make(chan bool, 1),
 
 		audioConsumer: config.AudioConsumer,
 	}
@@ -516,8 +518,8 @@ func (s *Session) PrivateSession() bool {
 	return C.sp_session_is_private_session(s.sp_session) == 1
 }
 
-func (s *Session) SetPrivateSession(private bool) {
-	C.sp_session_set_private_session(s.sp_session, cbool(private))
+func (s *Session) SetPrivateSession(private bool) error {
+	return spError(C.sp_session_set_private_session(s.sp_session, cbool(private)))
 }
 
 type SocialProvider C.sp_social_provider
@@ -716,6 +718,12 @@ func (s *Session) LoginUpdates() <-chan error {
 // session has been logged out.
 func (s *Session) LogoutUpdates() <-chan struct{} {
 	return s.loggedOut
+}
+
+// PrivateSessionUpdates returns a channel used to get notified when
+// the private session mode has changed.
+func (s *Session) PrivateSessionUpdates() <-chan bool {
+	return s.privateSessionMode
 }
 
 type SearchType C.sp_search_type
@@ -997,7 +1005,10 @@ func (s *Session) cbScrobbleError(err error) {
 }
 
 func (s *Session) cbPrivateSessionModeChanged(private bool) {
-	println("private mode changed", private)
+	select {
+	case s.privateSessionMode <- private:
+	default:
+	}
 }
 
 //export go_logged_in
