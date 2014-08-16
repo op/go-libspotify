@@ -539,8 +539,8 @@ func (s *Session) PrivateSession() bool {
 	return C.sp_session_is_private_session(s.sp_session) == 1
 }
 
-func (s *Session) SetPrivateSession(private bool) {
-	C.sp_session_set_private_session(s.sp_session, cbool(private))
+func (s *Session) SetPrivateSession(private bool) error {
+	return spError(C.sp_session_set_private_session(s.sp_session, cbool(private)))
 }
 
 type SocialProvider C.sp_social_provider
