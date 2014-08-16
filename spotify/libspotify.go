@@ -1725,7 +1725,7 @@ func (s *Search) TotalPlaylists() int {
 	return int(C.sp_search_total_playlists(s.sp_search))
 }
 
-func (s *search) Playlist(n int) *Playlist {
+func (s *Search) Playlist(n int) *Playlist {
 	if n < 0 || n >= s.Playlists() {
 		panic("spotify: search playlist out of range")
 	}
@@ -1733,21 +1733,21 @@ func (s *search) Playlist(n int) *Playlist {
 	return newPlaylist(s.session, sp_playlist, true)
 }
 
-func (s *search) PlaylistName(n int) string {
+func (s *Search) PlaylistName(n int) string {
 	if n < 0 || n >= s.Playlists() {
 		panic("spotify: search playlist out of range")
 	}
 	return C.GoString(C.sp_search_playlist_name(s.sp_search, C.int(n)))
 }
 
-func (s *search) PlaylistUri(n int) string {
+func (s *Search) PlaylistUri(n int) string {
 	if n < 0 || n >= s.Playlists() {
 		panic("spotify: search playlist out of range")
 	}
 	return C.GoString(C.sp_search_playlist_uri(s.sp_search, C.int(n)))
 }
 
-func (s *search) PlaylistImageUri(n int) string {
+func (s *Search) PlaylistImageUri(n int) string {
 	if n < 0 || n >= s.Playlists() {
 		panic("spotify: search playlist out of range")
 	}
