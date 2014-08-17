@@ -201,3 +201,13 @@ void SP_CALLCONV cb_playlist_state_changed(sp_playlist *playlist, void *userdata
 {
 	go_playlist_state_changed(playlist, userdata);
 }
+
+void set_image_callback(sp_image *image, void *userdata)
+{
+	sp_image_add_load_callback(image, &cb_image_complete, userdata);
+}
+
+void SP_CALLCONV cb_image_complete(sp_image *image, void *userdata)
+{
+	go_image_complete(image, userdata);
+}

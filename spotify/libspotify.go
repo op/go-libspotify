@@ -25,7 +25,10 @@ package spotify
 import "C"
 
 import (
+	"bytes"
 	"errors"
+	"image"
+	_ "image/jpeg"
 	"net/url"
 	"runtime"
 	"strings"
@@ -157,11 +160,12 @@ type Session struct {
 	rawLogMessages chan string
 	logMessages    chan *LogMessage
 
-	credentialsBlobs chan []byte
-	states           chan struct{}
-	loggedIn         chan error
-	loggedOut        chan struct{}
-	endOfTrack       chan struct{}
+	credentialsBlobs   chan []byte
+	states             chan struct{}
+	loggedIn           chan error
+	loggedOut          chan struct{}
+	endOfTrack         chan struct{}
+	privateSessionMode chan bool
 
 	wg      sync.WaitGroup
 	stop    chan struct{}
@@ -184,13 +188,14 @@ func NewSession(config *Config) (*Session, error) {
 		metadataUpdates: make(map[updatesListener]struct{}),
 		userInfoUpdates: make(map[updatesListener]struct{}),
 
-		rawLogMessages:   make(chan string, 128),
-		logMessages:      make(chan *LogMessage, 128),
-		credentialsBlobs: make(chan []byte, 1),
-		states:           make(chan struct{}, 1),
-		loggedIn:         make(chan error, 1),
-		loggedOut:        make(chan struct{}, 1),
-		endOfTrack:       make(chan struct{}, 1),
+		rawLogMessages:     make(chan string, 128),
+		logMessages:        make(chan *LogMessage, 128),
+		credentialsBlobs:   make(chan []byte, 1),
+		states:             make(chan struct{}, 1),
+		loggedIn:           make(chan error, 1),
+		loggedOut:          make(chan struct{}, 1),
+		endOfTrack:         make(chan struct{}, 1),
+		privateSessionMode: make(chan bool, 1),
 
 		audioConsumer: config.AudioConsumer,
 	}
@@ -515,8 +520,8 @@ func (s *Session) PrivateSession() bool {
 	return C.sp_session_is_private_session(s.sp_session) == 1
 }
 
-func (s *Session) SetPrivateSession(private bool) {
-	C.sp_session_set_private_session(s.sp_session, cbool(private))
+func (s *Session) SetPrivateSession(private bool) error {
+	return spError(C.sp_session_set_private_session(s.sp_session, cbool(private)))
 }
 
 type SocialProvider C.sp_social_provider
@@ -717,6 +722,12 @@ func (s *Session) LogoutUpdates() <-chan struct{} {
 	return s.loggedOut
 }
 
+// PrivateSessionUpdates returns a channel used to get notified when
+// the private session mode has changed.
+func (s *Session) PrivateSessionUpdates() <-chan bool {
+	return s.privateSessionMode
+}
+
 type SearchType C.sp_search_type
 
 const (
@@ -751,7 +762,7 @@ type SearchOptions struct {
 }
 
 // Search searches Spotify for track, album, artist and / or playlists.
-func (s *Session) Search(query string, opts *SearchOptions) (*search, error) {
+func (s *Session) Search(query string, opts *SearchOptions) (*Search, error) {
 	return newSearch(s, query, opts)
 }
 
@@ -996,7 +1007,10 @@ func (s *Session) cbScrobbleError(err error) {
 }
 
 func (s *Session) cbPrivateSessionModeChanged(private bool) {
-	println("private mode changed", private)
+	select {
+	case s.privateSessionMode <- private:
+	default:
+	}
 }
 
 //export go_logged_in
@@ -1145,7 +1159,7 @@ func go_private_session_mode_changed(spSession unsafe.Pointer, is_private C.bool
 
 //export go_search_complete
 func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
-	s := (*search)(userdata)
+	s := (*Search)(userdata)
 	s.cbComplete()
 }
 
@@ -1153,16 +1167,13 @@ func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
 func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.Pointer) {
 	// TODO find a nicer way to do this
 	t := (*toplist)(userdata)
-	switch t.ttype {
-	case toplistTypeArtists:
-		((*ArtistsToplist)(userdata)).cbComplete()
-	case toplistTypeAlbums:
-		((*AlbumsToplist)(userdata)).cbComplete()
-	case toplistTypeTracks:
-		((*TracksToplist)(userdata)).cbComplete()
-	default:
-		panic("spotify: unhandled toplist type")
-	}
+	t.cbComplete()
+}
+
+//export go_image_complete
+func go_image_complete(spImage unsafe.Pointer, userdata unsafe.Pointer) {
+	i := (*Image)(userdata)
+	i.cbComplete()
 }
 
 // AudioConsumer is the interface used to deliver music. The data delivered
@@ -1438,6 +1449,9 @@ func (l *Link) release() {
 func (l *Link) String() string {
 	// Determine how big string we need and get the string out.
 	size := C.sp_link_as_string(l.sp_link, nil, 0)
+	if C.size_t(size) == 0 {
+		return ""
+	}
 	buf := (*C.char)(C.malloc(C.size_t(size) + 1))
 	if buf == nil {
 		return "<invalid>"
@@ -1496,14 +1510,23 @@ func (l *Link) User() (*User, error) {
 	return newUser(l.session, C.sp_link_as_user(l.sp_link)), nil
 }
 
-type search struct {
+func (l *Link) Image() (*Image, error) {
+	if l.Type() != LinkTypeImage {
+		return nil, errors.New("spotify: link is not for an image")
+	}
+
+	sp_image := C.sp_image_create_from_link(l.session.sp_session, l.sp_link)
+	return newImage(l.session, sp_image), nil
+}
+
+type Search struct {
 	session   *Session
 	sp_search *C.sp_search
 	wg        sync.WaitGroup
 }
 
-func newSearch(session *Session, query string, opts *SearchOptions) (*search, error) {
-	s := &search{session: session}
+func newSearch(session *Session, query string, opts *SearchOptions) (*Search, error) {
+	s := &Search{session: session}
 	s.wg.Add(1)
 
 	cquery := C.CString(query)
@@ -1526,11 +1549,11 @@ func newSearch(session *Session, query string, opts *SearchOptions) (*search, er
 	if s.sp_search == nil {
 		return nil, errors.New("spotify: failed to search")
 	}
-	runtime.SetFinalizer(s, (*search).release)
+	runtime.SetFinalizer(s, (*Search).release)
 	return s, nil
 }
 
-func (s *search) release() {
+func (s *Search) release() {
 	if s.sp_search == nil {
 		panic("spotify: search object has no sp_search object")
 	}
@@ -1538,40 +1561,40 @@ func (s *search) release() {
 	s.sp_search = nil
 }
 
-func (s *search) Wait() {
+func (s *Search) Wait() {
 	s.wg.Wait()
 }
 
-func (s *search) Link() *Link {
+func (s *Search) Link() *Link {
 	sp_link := C.sp_link_create_from_search(s.sp_search)
 	return newLink(s.session, sp_link, false)
 }
 
-func (s *search) cbComplete() {
+func (s *Search) cbComplete() {
 	s.wg.Done()
 }
 
-func (s *search) Error() error {
+func (s *Search) Error() error {
 	return spError(C.sp_search_error(s.sp_search))
 }
 
-func (s *search) Query() string {
+func (s *Search) Query() string {
 	return C.GoString(C.sp_search_query(s.sp_search))
 }
 
-func (s *search) DidYouMean() string {
+func (s *Search) DidYouMean() string {
 	return C.GoString(C.sp_search_did_you_mean(s.sp_search))
 }
 
-func (s *search) Tracks() int {
+func (s *Search) Tracks() int {
 	return int(C.sp_search_num_tracks(s.sp_search))
 }
 
-func (s *search) TotalTracks() int {
+func (s *Search) TotalTracks() int {
 	return int(C.sp_search_total_tracks(s.sp_search))
 }
 
-func (s *search) Track(n int) *Track {
+func (s *Search) Track(n int) *Track {
 	if n < 0 || n >= s.Tracks() {
 		panic("spotify: search track out of range")
 	}
@@ -1579,15 +1602,15 @@ func (s *search) Track(n int) *Track {
 	return newTrack(s.session, sp_track)
 }
 
-func (s *search) Albums() int {
+func (s *Search) Albums() int {
 	return int(C.sp_search_num_albums(s.sp_search))
 }
 
-func (s *search) TotalAlbums() int {
+func (s *Search) TotalAlbums() int {
 	return int(C.sp_search_total_albums(s.sp_search))
 }
 
-func (s *search) Album(n int) *Album {
+func (s *Search) Album(n int) *Album {
 	if n < 0 || n >= s.Albums() {
 		panic("spotify: search album out of range")
 	}
@@ -1595,15 +1618,15 @@ func (s *search) Album(n int) *Album {
 	return newAlbum(s.session, sp_album)
 }
 
-func (s *search) Artists() int {
+func (s *Search) Artists() int {
 	return int(C.sp_search_num_artists(s.sp_search))
 }
 
-func (s *search) TotalArtists() int {
+func (s *Search) TotalArtists() int {
 	return int(C.sp_search_total_artists(s.sp_search))
 }
 
-func (s *search) Artist(n int) *Artist {
+func (s *Search) Artist(n int) *Artist {
 	if n < 0 || n >= s.Artists() {
 		panic("spotify: search artist out of range")
 	}
@@ -1611,15 +1634,42 @@ func (s *search) Artist(n int) *Artist {
 	return newArtist(s.session, sp_artist)
 }
 
-func (s *search) Playlists() int {
+func (s *Search) Playlists() int {
 	return int(C.sp_search_num_playlists(s.sp_search))
 }
 
-func (s *search) TotalPlaylists() int {
+func (s *Search) TotalPlaylists() int {
 	return int(C.sp_search_total_playlists(s.sp_search))
 }
 
-// TODO sp_search_playlist
+func (s *Search) Playlist(n int) *Playlist {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	sp_playlist := C.sp_search_playlist(s.sp_search, C.int(n))
+	return newPlaylist(s.session, sp_playlist, true)
+}
+
+func (s *Search) PlaylistName(n int) string {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	return C.GoString(C.sp_search_playlist_name(s.sp_search, C.int(n)))
+}
+
+func (s *Search) PlaylistUri(n int) string {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	return C.GoString(C.sp_search_playlist_uri(s.sp_search, C.int(n)))
+}
+
+func (s *Search) PlaylistImageUri(n int) string {
+	if n < 0 || n >= s.Playlists() {
+		panic("spotify: search playlist out of range")
+	}
+	return C.GoString(C.sp_search_playlist_image_uri(s.sp_search, C.int(n)))
+}
 
 type Track struct {
 	session  *Session
@@ -1912,8 +1962,23 @@ func (a *Album) Artist() *Artist {
 	return newArtist(a.session, C.sp_album_artist(a.sp_album))
 }
 
-// TODO sp_album_cover
-// TODO sp_link_create_from_album_cover
+func (a *Album) CoverLink(size ImageSize) *Link {
+	if sp_link := C.sp_link_create_from_album_cover(a.sp_album,
+		C.sp_image_size(size)); sp_link != nil {
+		return newLink(a.session, sp_link, false)
+	}
+
+	return nil
+}
+
+func (a *Album) Cover(size ImageSize) *Image {
+	if id := C.sp_album_cover(a.sp_album, C.sp_image_size(size)); id != nil {
+		sp_image := C.sp_image_create(a.session.sp_session, id)
+		return newImage(a.session, sp_image)
+	}
+
+	return nil
+}
 
 // Name returns the name of the album.
 func (a *Album) Name() string {
@@ -1988,8 +2053,23 @@ func (a *Artist) Name() string {
 	return C.GoString(C.sp_artist_name(a.sp_artist))
 }
 
-// TODO sp_artist_portrait
-// TODO sp_link_create_from_artist_portrait
+func (a *Artist) PortraitLink(size ImageSize) *Link {
+	if sp_link := C.sp_link_create_from_artist_portrait(a.sp_artist,
+		C.sp_image_size(size)); sp_link != nil {
+		return newLink(a.session, sp_link, false)
+	}
+
+	return nil
+}
+
+func (a *Artist) Portrait(size ImageSize) *Image {
+	if id := C.sp_artist_portrait(a.sp_artist, C.sp_image_size(size)); id != nil {
+		sp_image := C.sp_image_create(a.session.sp_session, id)
+		return newImage(a.session, sp_image)
+	}
+
+	return nil
+}
 
 type RelationType C.sp_relation_type
 
@@ -2207,7 +2287,15 @@ func (p *Playlist) Description() string {
 	return C.GoString(C.sp_playlist_get_description(p.sp_playlist))
 }
 
-// TODO sp_playlist_get_image
+func (p *Playlist) Image() *Image {
+	id := make([]byte, 20)
+	if C.sp_playlist_get_image(p.sp_playlist,
+		(*C.byte)(&id[0])) == 0 {
+		return nil
+	}
+	sp_image := C.sp_image_create(p.session.sp_session, (*C.byte)(&id[0]))
+	return newImage(p.session, sp_image)
+}
 
 func (p *Playlist) HasPendingChanges() bool {
 	return C.sp_playlist_has_pending_changes(p.sp_playlist) == 1
@@ -2377,7 +2465,7 @@ func newToplist(s *Session, ttype toplistType, r ToplistRegion, user *User) *top
 		C.sp_toplisttype(ttype),
 		C.sp_toplistregion(r),
 		cusername,
-		unsafe.Pointer(&t),
+		unsafe.Pointer(t),
 	)
 	runtime.SetFinalizer(t, (*toplist).release)
 	return t
@@ -2480,6 +2568,97 @@ func (tt *TracksToplist) Track(n int) *Track {
 	}
 	sp_track := C.sp_toplistbrowse_track(tt.sp_toplistbrowse, C.int(n))
 	return newTrack(tt.session, sp_track)
+}
+
+type ImageSize C.sp_image_size
+
+const (
+	// Normal image size
+	ImageSizeNormal = ImageSize(C.SP_IMAGE_SIZE_NORMAL)
+
+	// Small image size
+	ImageSizeSmall = ImageSize(C.SP_IMAGE_SIZE_SMALL)
+
+	// Large image size
+	ImageSizeLarge = ImageSize(C.SP_IMAGE_SIZE_LARGE)
+)
+
+type ImageFormat C.sp_imageformat
+
+const (
+	// Unknown image format
+	ImageFormatUnknown = ImageFormat(C.SP_IMAGE_FORMAT_UNKNOWN)
+
+	// JPEG image
+	ImageFormatJpeg = ImageFormat(C.SP_IMAGE_FORMAT_JPEG)
+)
+
+type Image struct {
+	session  *Session
+	sp_image *C.sp_image
+	wg       sync.WaitGroup
+}
+
+func newImage(s *Session, sp_image *C.sp_image) *Image {
+	C.sp_image_add_ref(sp_image)
+	i := &Image{session: s, sp_image: sp_image}
+	runtime.SetFinalizer(i, (*Image).release)
+
+	i.wg.Add(1)
+	C.set_image_callback(sp_image, unsafe.Pointer(i))
+
+	return i
+}
+
+func (i *Image) release() {
+	if i.sp_image == nil {
+		panic("spotify: image object has no sp_image object")
+	}
+
+	C.sp_image_release(i.sp_image)
+	i.sp_image = nil
+}
+
+func (i *Image) cbComplete() {
+	if i.isLoaded() {
+		i.wg.Done()
+	}
+}
+
+func (i *Image) Wait() {
+	i.wg.Wait()
+	if !i.isLoaded() {
+		panic("spotify: image is not loaded")
+	}
+}
+
+func (i *Image) isLoaded() bool {
+	return C.sp_image_is_loaded(i.sp_image) == 1
+}
+
+// Error returns an error associated with an image.
+func (i *Image) Error() error {
+	return spError(C.sp_image_error(i.sp_image))
+}
+
+// Data returns the image data.
+func (i *Image) Data() []byte {
+	var size C.size_t
+	var data unsafe.Pointer = C.sp_image_data(i.sp_image, &size)
+	return C.GoBytes(data, C.int(size))
+}
+
+// Decode returns a decoded image and the format name used during format
+// registration.
+func (i *Image) Decode() (image.Image, string, error) {
+	data := i.Data()
+	buffer := bytes.NewBuffer(data)
+	return image.Decode(buffer)
+}
+
+// Format returns the image format.
+func (i *Image) Format() ImageFormat {
+	return ImageFormat(C.sp_image_format(i.sp_image))
 }
 
 // BuildId returns the libspotify build ID.
