@@ -25,9 +25,11 @@ package spotify
 import "C"
 
 import (
+	"bytes"
 	"errors"
+	"image"
+	_ "image/jpeg"
 	"net/url"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -2728,14 +2730,15 @@ func (i *Image) Error() error {
 func (i *Image) Data() []byte {
 	var size C.size_t
 	var data unsafe.Pointer = C.sp_image_data(i.sp_image, &size)
+	return C.GoBytes(data, C.int(size))
+}
 
-	hdr := reflect.SliceHeader{
-		Data: uintptr(data),
-		Len:  int(size),
-		Cap:  int(size),
-	}
-
-	return *(*[]byte)(unsafe.Pointer(&hdr))
+// Decode returns a decoded image and the format name used during format
+// registration.
+func (i *Image) Decode() (image.Image, string, error) {
+	data := i.Data()
+	buffer := bytes.NewBuffer(data)
+	return image.Decode(buffer)
 }
 
 // Format returns the image format.
