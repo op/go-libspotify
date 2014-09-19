@@ -162,6 +162,7 @@ type Session struct {
 	loggedIn         chan error
 	loggedOut        chan struct{}
 	endOfTrack       chan struct{}
+	playTokenLost    chan struct{}
 
 	wg      sync.WaitGroup
 	stop    chan struct{}
@@ -191,6 +192,7 @@ func NewSession(config *Config) (*Session, error) {
 		loggedIn:         make(chan error, 1),
 		loggedOut:        make(chan struct{}, 1),
 		endOfTrack:       make(chan struct{}, 1),
+		playTokenLost:    make(chan struct{}, 1),
 
 		audioConsumer: config.AudioConsumer,
 	}
@@ -705,6 +707,12 @@ func (s *Session) EndOfTrackUpdates() <-chan struct{} {
 	return s.endOfTrack
 }
 
+// PlayTokenLostUpdates returns a channel used to get updates
+// when user loses the play token.
+func (s *Session) PlayTokenLostUpdates() <-chan struct{} {
+	return s.playTokenLost
+}
+
 // LoginUpdates returns a channel used to get notified when the
 // session has been logged in.
 func (s *Session) LoginUpdates() <-chan error {
@@ -931,8 +939,10 @@ func (s *Session) cbMusicDelivery(format AudioFormat, frames []byte) int {
 }
 
 func (s *Session) cbPlayTokenLost() {
-	// TODO
-	println("play token lost")
+	select {
+	case s.playTokenLost <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Session) cbLogMessage(message string) {
