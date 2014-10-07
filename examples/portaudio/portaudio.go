@@ -22,9 +22,11 @@ import (
 	"os"
 	"path"
 	"sync"
+	"time"
 
 	"code.google.com/p/portaudio-go/portaudio"
 	"github.com/op/go-libspotify/spotify"
+	"github.com/visionmedia/go-spin"
 )
 
 var (
@@ -290,9 +292,43 @@ func main() {
 		fmt.Println("%#v", err)
 		log.Fatal(err)
 	}
+	defer player.Unload()
 
 	player.Play()
 
+	// Output some progress information
+	spinner := spin.New()
+	pattern := spin.Box2
+	spinner.Set(pattern)
+
+	c1 := time.Tick(time.Millisecond)
+	c2 := time.Tick(time.Second / time.Duration(len([]rune(pattern))))
+
+	formatDuration := func(d time.Duration) string {
+		cen := d / time.Millisecond / 10 % 100
+		sec := d / time.Second % 60
+		min := d / time.Minute % 60
+		return fmt.Sprintf("%02d:%02d.%02d", min, sec, cen)
+	}
+
+	now := time.Now()
+	start := now
+	indicator := spinner.Next()
+	for {
+		select {
+		case now = <-c1:
+		case <-c2:
+			indicator = spinner.Next()
+			continue
+		}
+		elapsed := now.Sub(start)
+		fmt.Printf("\r %s %s / %s ", indicator,
+			formatDuration(elapsed),
+			formatDuration(track.Duration()))
+		if elapsed >= track.Duration() {
+			break
+		}
+	}
+	print("\r")
 	<-session.EndOfTrackUpdates()
-	player.Unload()
 }

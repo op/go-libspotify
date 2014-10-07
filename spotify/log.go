@@ -15,7 +15,6 @@
 package spotify
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -94,8 +93,6 @@ func parseLogMessage(line string) (*LogMessage, error) {
 
 	m := logMessageRe.FindStringSubmatch(unparsed)
 	if m == nil {
-		println(hex.Dump([]byte(unparsed)))
-		println("regexp '", unparsed, "'")
 		return nil, errLogInvalidFormat
 	}
 	strLevel := m[1]

@@ -1,3 +1,4 @@
 *.key
 /examples/gospshell/gospshell
+/examples/portaudio/portaudio
 /tmp
