@@ -161,11 +161,8 @@ func main() {
 	}
 
 	// Wait for login and expect it to go fine
-	select {
-	case err := <-session.LoginUpdates():
-		if err != nil {
-			log.Fatal(err)
-		}
+	if err = <-session.LoggedInUpdates(); err != nil {
+		log.Fatal(err)
 	}
 
 	// Parse the track

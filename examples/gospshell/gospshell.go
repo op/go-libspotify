@@ -95,26 +95,33 @@ func main() {
 			}
 
 			select {
-			case message := <-session.LogMessages():
-				if *debug {
-					println("!! log message", message.String())
-				}
-			case <-session.ConnectionStateUpdates():
-				if *debug {
-					println("!! connstate", session.ConnectionState())
-				}
-			case err := <-session.LoginUpdates():
+			case err := <-session.LoggedInUpdates():
 				if *debug {
 					println("!! login updated", err)
 				}
-			case <-session.LogoutUpdates():
+			case <-session.LoggedOutUpdates():
 				if *debug {
 					println("!! logout updated")
 				}
 				running = false
+				break
+			case err := session.ConnectionErrorUpdates():
+				if *debug {
+					println("!! connection error", err.Error())
+				}
+			case msg := <-session.MessagesToUser():
+				println("!! message to user", msg)
+			case message := <-session.LogMessages():
+				if *debug {
+					println("!! log message", message.String())
+				}
 			case _ = <-session.CredentialsBlobUpdates():
 				if *debug {
 					println("!! blob updated")
+				}
+			case <-session.ConnectionStateUpdates():
+				if *debug {
+					println("!! connstate", session.ConnectionState())
 				}
 			case <-exit:
 				if *debug {

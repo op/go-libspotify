@@ -116,11 +116,6 @@ var (
 // event is an internal type passed around to wake the main session thread up.
 type event int
 
-const (
-	eWakeup event = iota
-	eStop
-)
-
 // Credentials are used when logging a user in.
 type Credentials struct {
 	// Username is the spotify username.
@@ -141,15 +136,16 @@ type Session struct {
 	sp_session *C.sp_session
 	mu         sync.Mutex
 
-	audioConsumer AudioConsumer
-
-	events chan event
+	loggedIn  chan error
+	loggedOut chan struct{}
 
 	metadataUpdatesMu sync.Mutex
 	metadataUpdates   map[updatesListener]struct{}
 
-	userInfoUpdatesMu sync.Mutex
-	userInfoUpdates   map[updatesListener]struct{}
+	connectionErrors chan error
+	messagesToUser   chan string
+	notifyMainThread chan struct{}
+	playTokenLost    chan struct{}
 
 	// rawLogMessages is the first place where all log messages ends up, and
 	// later once parsed they're moved to the logMessage channel which is
@@ -157,16 +153,23 @@ type Session struct {
 	rawLogMessages chan string
 	logMessages    chan *LogMessage
 
-	credentialsBlobs chan []byte
-	states           chan struct{}
-	loggedIn         chan error
-	loggedOut        chan struct{}
-	endOfTrack       chan struct{}
-	playTokenLost    chan struct{}
+	endOfTrack      chan struct{}
+	streamingErrors chan error
 
-	wg      sync.WaitGroup
-	stop    chan struct{}
-	dealloc sync.Once
+	userInfoUpdatesMu sync.Mutex
+	userInfoUpdates   map[updatesListener]struct{}
+
+	credentialsBlobs chan []byte
+	connectionStates chan struct{}
+
+	scrobbleErrors        chan error
+	privateSessionChanges chan bool
+
+	audioConsumer AudioConsumer
+
+	wg       sync.WaitGroup
+	dealloc  sync.Once
+	shutdown chan struct{}
 }
 
 // sessionCall maps the C Spotify session structure to the Go session and
@@ -180,19 +183,32 @@ func sessionCall(spSession unsafe.Pointer, callback func(*Session)) {
 // NewSession creates a new session based on the given configuration.
 func NewSession(config *Config) (*Session, error) {
 	session := &Session{
-		events: make(chan event, 1),
+		shutdown: make(chan struct{}),
+
+		// Event channels, same order as api.h
+		loggedIn:  make(chan error, 1),
+		loggedOut: make(chan struct{}, 1),
 
 		metadataUpdates: make(map[updatesListener]struct{}),
+
+		connectionErrors: make(chan error, 1),
+		messagesToUser:   make(chan string, 1),
+		notifyMainThread: make(chan struct{}, 1),
+		playTokenLost:    make(chan struct{}, 1),
+
+		rawLogMessages: make(chan string, 128),
+		logMessages:    make(chan *LogMessage, 128),
+
+		endOfTrack:      make(chan struct{}, 1),
+		streamingErrors: make(chan error, 1),
+
 		userInfoUpdates: make(map[updatesListener]struct{}),
 
-		rawLogMessages:   make(chan string, 128),
-		logMessages:      make(chan *LogMessage, 128),
 		credentialsBlobs: make(chan []byte, 1),
-		states:           make(chan struct{}, 1),
-		loggedIn:         make(chan error, 1),
-		loggedOut:        make(chan struct{}, 1),
-		endOfTrack:       make(chan struct{}, 1),
-		playTokenLost:    make(chan struct{}, 1),
+		connectionStates: make(chan struct{}, 1),
+
+		scrobbleErrors:        make(chan error, 1),
+		privateSessionChanges: make(chan bool, 1),
 
 		audioConsumer: config.AudioConsumer,
 	}
@@ -684,9 +700,52 @@ func (s *Session) TracksToplist(region ToplistRegion) *TracksToplist {
 	return newTracksToplist(s, region, nil)
 }
 
+// LoggedInUpdates returns a channel used to get notified when the
+// login has been processed.
+func (s *Session) LoggedInUpdates() <-chan error {
+	return s.loggedIn
+}
+
+// LoggedOutUpdates returns a channel used to get notified when the
+// session has been logged out.
+func (s *Session) LoggedOutUpdates() <-chan struct{} {
+	return s.loggedOut
+}
+
+// ConnectionErrorUpdates returns a channel containing connection errors.
+func (s *Session) ConnectionErrorUpdates() <-chan error {
+	return s.connectionErrors
+}
+
+// MessagesToUser returns a channel containing messages which the access point
+// wants to display to a user.
+//
+// In the desktop client, these are shown in a blueish toolbar just below the
+// search box.
+func (s *Session) MessagesToUser() <-chan string {
+	return s.messagesToUser
+}
+
+// PlayTokenLostUpdates returns a channel used to get updates
+// when user loses the play token.
+func (s *Session) PlayTokenLostUpdates() <-chan struct{} {
+	return s.playTokenLost
+}
+
 // LogMessages returns a channel used to get log messages.
 func (s *Session) LogMessages() <-chan *LogMessage {
 	return s.logMessages
+}
+
+// EndOfTrackUpdates returns a channel used to get updates
+// when a track ends playing
+func (s *Session) EndOfTrackUpdates() <-chan struct{} {
+	return s.endOfTrack
+}
+
+// StreamingErrors returns a channel with streaming errors.
+func (s *Session) StreamingErrors() <-chan error {
+	return s.streamingErrors
 }
 
 // CredentialsBlobUpdates returns a channel used to get updates
@@ -698,31 +757,14 @@ func (s *Session) CredentialsBlobUpdates() <-chan []byte {
 // ConnectionStateUpdates returns a channel used to get updates on
 // the connection state.
 func (s *Session) ConnectionStateUpdates() <-chan struct{} {
-	return s.states
+	return s.connectionStates
 }
 
-// EndOfTrackUpdates returns a channel used to get updates
-// when a track ends playing
-func (s *Session) EndOfTrackUpdates() <-chan struct{} {
-	return s.endOfTrack
-}
-
-// PlayTokenLostUpdates returns a channel used to get updates
-// when user loses the play token.
-func (s *Session) PlayTokenLostUpdates() <-chan struct{} {
-	return s.playTokenLost
-}
-
-// LoginUpdates returns a channel used to get notified when the
-// session has been logged in.
-func (s *Session) LoginUpdates() <-chan error {
-	return s.loggedIn
-}
-
-// LogoutUpdates returns a channel used to get notified when the
-// session has been logged out.
-func (s *Session) LogoutUpdates() <-chan struct{} {
-	return s.loggedOut
+// ScrobbleErrors returns a channel with scrobble errors.
+//
+// Called when there is a scrobble error event.
+func (s *Session) ScrobbleErrors() <-chan error {
+	return s.scrobbleErrors
 }
 
 type SearchType C.sp_search_type
@@ -912,17 +954,22 @@ func (s *Session) cbMetadataUpdated() {
 }
 
 func (s *Session) cbConnectionError(err error) {
-	println("connection errror called", s, err)
+	select {
+	case s.connectionErrors <- err:
+	default:
+	}
 }
 
-func (s *Session) cbMessageToUser(message string) {
-	// TODO
-	println("message to user", message)
+func (s *Session) cbMessagesToUser(message string) {
+	select {
+	case s.messagesToUser <- message:
+	default:
+	}
 }
 
 func (s *Session) cbNotifyMainThread() {
 	select {
-	case s.events <- eWakeup:
+	case s.notifyMainThread <- struct{}{}:
 	default:
 		println("failed to notify main thread")
 		// TODO generate (internal) log message
@@ -960,7 +1007,10 @@ func (s *Session) cbEndOfTrack() {
 }
 
 func (s *Session) cbStreamingError(err error) {
-	println("streaming error", err.Error())
+	select {
+	case s.streamingErrors <- err:
+	default:
+	}
 }
 
 func (s *Session) cbUserInfoUpdated() {
@@ -996,13 +1046,16 @@ func (s *Session) cbCredentialsBlobUpdated(blob []byte) {
 
 func (s *Session) cbConnectionStateUpdated() {
 	select {
-	case s.states <- struct{}{}:
+	case s.connectionStates <- struct{}{}:
 	default:
 	}
 }
 
 func (s *Session) cbScrobbleError(err error) {
-	println("scrobble error", err.Error())
+	select {
+	case s.scrobbleErrors <- err:
+	default:
+	}
 }
 
 func (s *Session) cbPrivateSessionModeChanged(private bool) {
@@ -1036,7 +1089,7 @@ func go_connection_error(spSession unsafe.Pointer, spErr C.sp_error) {
 //export go_message_to_user
 func go_message_to_user(spSession unsafe.Pointer, message *C.char) {
 	sessionCall(spSession, func(s *Session) {
-		s.cbMessageToUser(C.GoString(message))
+		s.cbMessagesToUser(C.GoString(message))
 	})
 }
 
