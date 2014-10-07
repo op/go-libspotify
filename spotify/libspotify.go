@@ -326,11 +326,12 @@ func (s *Session) free() {
 func (s *Session) Close() error {
 	var err error
 	s.dealloc.Do(func() {
-		err = spError(C.sp_session_release(s.sp_session))
-
-		s.events <- eStop
+		// Send shutdown events to log and event processor
+		s.shutdown <- struct{}{}
+		s.shutdown <- struct{}{}
 		s.wg.Wait()
 
+		err = spError(C.sp_session_release(s.sp_session))
 		s.free()
 	})
 	return nil
@@ -839,11 +840,10 @@ func (s *Session) log(level LogLevel, message string) {
 }
 
 func (s *Session) processEvents() {
-	var nextTimeoutMs C.int
-
 	s.wg.Add(1)
 	defer s.wg.Done()
 
+	var nextTimeoutMs C.int
 	for {
 		s.mu.Lock()
 		rc := C.sp_session_process_events(s.sp_session, &nextTimeoutMs)
@@ -856,10 +856,9 @@ func (s *Session) processEvents() {
 		timeout := time.Duration(nextTimeoutMs) * time.Millisecond
 		select {
 		case <-time.After(timeout):
-		case evt := <-s.events:
-			if evt == eStop {
-				return
-			}
+		case <-s.notifyMainThread:
+		case <-s.shutdown:
+			return
 		}
 	}
 }
@@ -881,9 +880,8 @@ func (s *Session) processBackground() {
 			if err != nil {
 				s.log(LogWarning, err.Error()+": "+message)
 			}
-		case <-s.stop:
-			// TODO flush all messages
-			break
+		case <-s.shutdown:
+			return
 		}
 	}
 }
