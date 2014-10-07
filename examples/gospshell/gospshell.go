@@ -105,7 +105,7 @@ func main() {
 				}
 				running = false
 				break
-			case err := session.ConnectionErrorUpdates():
+			case err := <-session.ConnectionErrorUpdates():
 				if *debug {
 					println("!! connection error", err.Error())
 				}
