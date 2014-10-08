@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/signal"
 	"path"
 	"sync"
 	"syscall"
@@ -250,6 +251,9 @@ func main() {
 		uri = flag.Arg(0)
 	}
 
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, os.Kill)
+
 	appKey, err := ioutil.ReadFile(*appKeyPath)
 	if err != nil {
 		log.Fatal(err)
@@ -301,8 +305,13 @@ func main() {
 	}
 
 	// Wait for login and expect it to go fine
-	if err = <-session.LoggedInUpdates(); err != nil {
-		log.Fatal(err)
+	select {
+	case err = <-session.LoggedInUpdates():
+		if err != nil {
+			log.Fatal(err)
+		}
+	case <-signals:
+		return
 	}
 
 	// Parse the track
@@ -341,6 +350,8 @@ func main() {
 		return fmt.Sprintf("%02d:%02d.%02d", min, sec, cen)
 	}
 
+	defer func() { fmt.Printf("\r") }()
+
 	now := time.Now()
 	start := now
 	indicator := spinner.Next()
@@ -350,6 +361,8 @@ func main() {
 		case <-c2:
 			indicator = spinner.Next()
 			continue
+		case <-signals:
+			return
 		}
 		elapsed := now.Sub(start)
 		fmt.Printf("\r %s %s / %s ", indicator,
@@ -359,6 +372,5 @@ func main() {
 			break
 		}
 	}
-	print("\r")
 	<-session.EndOfTrackUpdates()
 }
