@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -342,6 +343,7 @@ func main() {
 
 	c1 := time.Tick(time.Millisecond)
 	c2 := time.Tick(time.Second / time.Duration(len([]rune(pattern))))
+	c3 := time.Tick(300 * time.Millisecond)
 
 	formatDuration := func(d time.Duration) string {
 		cen := d / time.Millisecond / 10 % 100
@@ -350,6 +352,16 @@ func main() {
 		return fmt.Sprintf("%02d:%02d.%02d", min, sec, cen)
 	}
 
+	track.Wait()
+	var artists []string
+	for i := 0; i < track.Artists(); i++ {
+		artists = append(artists, track.Artist(i).Name())
+	}
+	info := fmt.Sprintf(" %s - %s - %s -",
+		strings.Join(artists, ", "),
+		track.Album().Name(),
+		track.Name(),
+	)
 	defer func() { fmt.Printf("\r") }()
 
 	now := time.Now()
@@ -361,13 +373,19 @@ func main() {
 		case <-c2:
 			indicator = spinner.Next()
 			continue
+		case <-c3:
+			info = info[len(info)-1:] + info[:len(info)-1]
+			continue
 		case <-signals:
 			return
 		}
 		elapsed := now.Sub(start)
-		fmt.Printf("\r %s %s / %s ", indicator,
+		fmt.Printf("\r %s %s / %s ♫ %s",
+			indicator,
 			formatDuration(elapsed),
-			formatDuration(track.Duration()))
+			formatDuration(track.Duration()),
+			info,
+		)
 		if elapsed >= track.Duration() {
 			break
 		}
