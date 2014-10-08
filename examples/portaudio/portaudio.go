@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"syscall"
 	"time"
 
 	"code.google.com/p/portaudio-go/portaudio"
@@ -217,6 +218,29 @@ func (s *portAudioStream) Write() error {
 	return s.stream.Write()
 }
 
+type FdDiscard struct {
+	oldFd int
+	newFd int
+}
+
+func DiscardFd(fd int) FdDiscard {
+	newFd, err := syscall.Dup(fd)
+	if err == nil {
+		if err = syscall.Close(fd); err != nil {
+			newFd = 0
+		}
+	}
+	return FdDiscard{fd, newFd}
+}
+
+func (fd FdDiscard) Restore() error {
+	var err error
+	if fd.newFd > 0 {
+		err = syscall.Dup2(fd.newFd, fd.oldFd)
+	}
+	return err
+}
+
 func main() {
 	flag.Parse()
 	prog := path.Base(os.Args[0])
@@ -231,11 +255,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	var silenceStderr = DiscardFd(syscall.Stderr)
+	if *debug == true {
+		silenceStderr.Restore()
+	}
+
 	audio, err := newAudioWriter()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer audio.Close()
+	silenceStderr.Restore()
 
 	session, err := spotify.NewSession(&spotify.Config{
 		ApplicationKey:   appKey,
