@@ -159,8 +159,10 @@ type Session struct {
 	userInfoUpdatesMu sync.Mutex
 	userInfoUpdates   map[updatesListener]struct{}
 
-	credentialsBlobs chan []byte
-	connectionStates chan struct{}
+	offlineStatusUpdates chan struct{}
+	offlineErrors        chan error
+	credentialsBlobs     chan []byte
+	connectionStates     chan struct{}
 
 	scrobbleErrors        chan error
 	privateSessionChanges chan bool
@@ -204,8 +206,10 @@ func NewSession(config *Config) (*Session, error) {
 
 		userInfoUpdates: make(map[updatesListener]struct{}),
 
-		credentialsBlobs: make(chan []byte, 1),
-		connectionStates: make(chan struct{}, 1),
+		offlineStatusUpdates: make(chan struct{}, 1),
+		offlineErrors:        make(chan error, 1),
+		credentialsBlobs:     make(chan []byte, 1),
+		connectionStates:     make(chan struct{}, 1),
 
 		scrobbleErrors:        make(chan error, 1),
 		privateSessionChanges: make(chan bool, 1),
@@ -749,6 +753,20 @@ func (s *Session) StreamingErrors() <-chan error {
 	return s.streamingErrors
 }
 
+// OfflineStatusUpdates returns a channel containing
+// offline synchronization status updates.
+func (s *Session) OfflineStatusUpdates() <-chan struct{} {
+	return s.offlineStatusUpdates
+}
+
+// TODO document the difference between these functions
+
+// OfflineErrors returns a channel containing offline
+// synchronization status status updates.
+func (s *Session) OfflineErrors() <-chan error {
+	return s.offlineErrors
+}
+
 // CredentialsBlobUpdates returns a channel used to get updates
 // for credential blobs.
 func (s *Session) CredentialsBlobUpdates() <-chan []byte {
@@ -1028,11 +1046,17 @@ func (s *Session) cbGetAudioBufferStats() {
 }
 
 func (s *Session) cbOfflineStatusUpdated() {
-	println("offline status updated")
+	select {
+	case s.offlineStatusUpdates <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Session) cbOfflineError(err error) {
-	println("offline error", err.Error())
+	select {
+	case s.offlineErrors <- err:
+	default:
+	}
 }
 
 func (s *Session) cbCredentialsBlobUpdated(blob []byte) {
