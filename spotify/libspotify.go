@@ -786,6 +786,14 @@ func (s *Session) ScrobbleErrors() <-chan error {
 	return s.scrobbleErrors
 }
 
+// PrivateSessionModeChanges returns a channel where
+// private session changes are published.
+//
+// If the value is true, the user is in private mode.
+func (s *Session) PrivateSessionModeChanges() <-chan bool {
+	return s.privateSessionChanges
+}
+
 type SearchType C.sp_search_type
 
 const (
@@ -1081,7 +1089,10 @@ func (s *Session) cbScrobbleError(err error) {
 }
 
 func (s *Session) cbPrivateSessionModeChanged(private bool) {
-	println("private mode changed", private)
+	select {
+	case s.privateSessionChanges <- private:
+	default:
+	}
 }
 
 //export go_logged_in
