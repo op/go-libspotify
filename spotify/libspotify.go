@@ -802,7 +802,7 @@ type SearchOptions struct {
 }
 
 // Search searches Spotify for track, album, artist and / or playlists.
-func (s *Session) Search(query string, opts *SearchOptions) (*search, error) {
+func (s *Session) Search(query string, opts *SearchOptions) (*Search, error) {
 	return newSearch(s, query, opts)
 }
 
@@ -1206,7 +1206,7 @@ func go_private_session_mode_changed(spSession unsafe.Pointer, is_private C.bool
 
 //export go_search_complete
 func go_search_complete(spSearch unsafe.Pointer, userdata unsafe.Pointer) {
-	s := (*search)(userdata)
+	s := (*Search)(userdata)
 	s.cbComplete()
 }
 
@@ -1557,14 +1557,14 @@ func (l *Link) User() (*User, error) {
 	return newUser(l.session, C.sp_link_as_user(l.sp_link)), nil
 }
 
-type search struct {
+type Search struct {
 	session   *Session
 	sp_search *C.sp_search
 	wg        sync.WaitGroup
 }
 
-func newSearch(session *Session, query string, opts *SearchOptions) (*search, error) {
-	s := &search{session: session}
+func newSearch(session *Session, query string, opts *SearchOptions) (*Search, error) {
+	s := &Search{session: session}
 	s.wg.Add(1)
 
 	cquery := C.CString(query)
@@ -1587,11 +1587,11 @@ func newSearch(session *Session, query string, opts *SearchOptions) (*search, er
 	if s.sp_search == nil {
 		return nil, errors.New("spotify: failed to search")
 	}
-	runtime.SetFinalizer(s, (*search).release)
+	runtime.SetFinalizer(s, (*Search).release)
 	return s, nil
 }
 
-func (s *search) release() {
+func (s *Search) release() {
 	if s.sp_search == nil {
 		panic("spotify: search object has no sp_search object")
 	}
@@ -1599,40 +1599,40 @@ func (s *search) release() {
 	s.sp_search = nil
 }
 
-func (s *search) Wait() {
+func (s *Search) Wait() {
 	s.wg.Wait()
 }
 
-func (s *search) Link() *Link {
+func (s *Search) Link() *Link {
 	sp_link := C.sp_link_create_from_search(s.sp_search)
 	return newLink(s.session, sp_link, false)
 }
 
-func (s *search) cbComplete() {
+func (s *Search) cbComplete() {
 	s.wg.Done()
 }
 
-func (s *search) Error() error {
+func (s *Search) Error() error {
 	return spError(C.sp_search_error(s.sp_search))
 }
 
-func (s *search) Query() string {
+func (s *Search) Query() string {
 	return C.GoString(C.sp_search_query(s.sp_search))
 }
 
-func (s *search) DidYouMean() string {
+func (s *Search) DidYouMean() string {
 	return C.GoString(C.sp_search_did_you_mean(s.sp_search))
 }
 
-func (s *search) Tracks() int {
+func (s *Search) Tracks() int {
 	return int(C.sp_search_num_tracks(s.sp_search))
 }
 
-func (s *search) TotalTracks() int {
+func (s *Search) TotalTracks() int {
 	return int(C.sp_search_total_tracks(s.sp_search))
 }
 
-func (s *search) Track(n int) *Track {
+func (s *Search) Track(n int) *Track {
 	if n < 0 || n >= s.Tracks() {
 		panic("spotify: search track out of range")
 	}
@@ -1640,15 +1640,15 @@ func (s *search) Track(n int) *Track {
 	return newTrack(s.session, sp_track)
 }
 
-func (s *search) Albums() int {
+func (s *Search) Albums() int {
 	return int(C.sp_search_num_albums(s.sp_search))
 }
 
-func (s *search) TotalAlbums() int {
+func (s *Search) TotalAlbums() int {
 	return int(C.sp_search_total_albums(s.sp_search))
 }
 
-func (s *search) Album(n int) *Album {
+func (s *Search) Album(n int) *Album {
 	if n < 0 || n >= s.Albums() {
 		panic("spotify: search album out of range")
 	}
@@ -1656,15 +1656,15 @@ func (s *search) Album(n int) *Album {
 	return newAlbum(s.session, sp_album)
 }
 
-func (s *search) Artists() int {
+func (s *Search) Artists() int {
 	return int(C.sp_search_num_artists(s.sp_search))
 }
 
-func (s *search) TotalArtists() int {
+func (s *Search) TotalArtists() int {
 	return int(C.sp_search_total_artists(s.sp_search))
 }
 
-func (s *search) Artist(n int) *Artist {
+func (s *Search) Artist(n int) *Artist {
 	if n < 0 || n >= s.Artists() {
 		panic("spotify: search artist out of range")
 	}
@@ -1672,11 +1672,11 @@ func (s *search) Artist(n int) *Artist {
 	return newArtist(s.session, sp_artist)
 }
 
-func (s *search) Playlists() int {
+func (s *Search) Playlists() int {
 	return int(C.sp_search_num_playlists(s.sp_search))
 }
 
-func (s *search) TotalPlaylists() int {
+func (s *Search) TotalPlaylists() int {
 	return int(C.sp_search_total_playlists(s.sp_search))
 }
 
