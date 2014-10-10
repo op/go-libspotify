@@ -2250,7 +2250,6 @@ type Playlist struct {
 	callbacks   C.sp_playlist_callbacks
 	refOwned    bool
 
-	mu     sync.Mutex
 	wg     sync.WaitGroup
 	loaded chan struct{}
 }
@@ -2263,8 +2262,6 @@ func newPlaylist(s *Session, sp_playlist *C.sp_playlist, refOwned bool) *Playlis
 		refOwned:    refOwned,
 		loaded:      make(chan struct{}, 1),
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	runtime.SetFinalizer(p, (*Playlist).release)
 	C.set_playlist_callbacks(&p.callbacks)
