@@ -1599,8 +1599,10 @@ func (l *Link) Image() (*Image, error) {
 	if l.Type() != LinkTypeImage {
 		return nil, errors.New("spotify: link is not for an image")
 	}
-
 	sp_image := C.sp_image_create_from_link(l.session.sp_session, l.sp_link)
+	if sp_image != nil {
+		return nil, errors.New("spotify: failed to create image from link")
+	}
 	return newImage(l.session, sp_image), nil
 }
 
@@ -2056,13 +2058,16 @@ func (a *Album) CoverLink(size ImageSize) *Link {
 	return nil
 }
 
-func (a *Album) Cover(size ImageSize) *Image {
-	if id := C.sp_album_cover(a.sp_album, C.sp_image_size(size)); id != nil {
-		sp_image := C.sp_image_create(a.session.sp_session, id)
-		return newImage(a.session, sp_image)
+func (a *Album) Cover(size ImageSize) (*Image, error) {
+	id := C.sp_album_cover(a.sp_album, C.sp_image_size(size))
+	if id == nil {
+		return nil, errors.New("spotify: failed to load album cover")
 	}
-
-	return nil
+	sp_image := C.sp_image_create(a.session.sp_session, id)
+	if sp_image == nil {
+		return nil, errors.New("spotify: failed to create image for album cover")
+	}
+	return newImage(a.session, sp_image), nil
 }
 
 // Name returns the name of the album.
@@ -2139,21 +2144,25 @@ func (a *Artist) Name() string {
 }
 
 func (a *Artist) PortraitLink(size ImageSize) *Link {
-	if sp_link := C.sp_link_create_from_artist_portrait(a.sp_artist,
-		C.sp_image_size(size)); sp_link != nil {
-		return newLink(a.session, sp_link, false)
+	sp_link := C.sp_link_create_from_artist_portrait(
+		a.sp_artist, C.sp_image_size(size),
+	)
+	if sp_link == nil {
+		panic("spotify: portrait link is null")
 	}
-
-	return nil
+	return newLink(a.session, sp_link, false)
 }
 
-func (a *Artist) Portrait(size ImageSize) *Image {
-	if id := C.sp_artist_portrait(a.sp_artist, C.sp_image_size(size)); id != nil {
-		sp_image := C.sp_image_create(a.session.sp_session, id)
-		return newImage(a.session, sp_image)
+func (a *Artist) Portrait(size ImageSize) (*Image, error) {
+	id := C.sp_artist_portrait(a.sp_artist, C.sp_image_size(size))
+	if id == nil {
+		return nil, errors.New("spotify: failed to load artist portrait")
 	}
-
-	return nil
+	sp_image := C.sp_image_create(a.session.sp_session, id)
+	if sp_image == nil {
+		return nil, errors.New("spotify: failed to create image for artist portrait")
+	}
+	return newImage(a.session, sp_image), nil
 }
 
 type RelationType C.sp_relation_type
@@ -2369,14 +2378,16 @@ func (p *Playlist) Description() string {
 	return C.GoString(C.sp_playlist_get_description(p.sp_playlist))
 }
 
-func (p *Playlist) Image() *Image {
+func (p *Playlist) Image() (*Image, error) {
 	id := make([]byte, 20)
-	if C.sp_playlist_get_image(p.sp_playlist,
-		(*C.byte)(&id[0])) == 0 {
-		return nil
+	if C.sp_playlist_get_image(p.sp_playlist, (*C.byte)(&id[0])) == 0 {
+		return nil, errors.New("spotify: playlist has no image")
 	}
 	sp_image := C.sp_image_create(p.session.sp_session, (*C.byte)(&id[0]))
-	return newImage(p.session, sp_image)
+	if sp_image == nil {
+		return nil, errors.New("spotify: failed to create image for playlist")
+	}
+	return newImage(p.session, sp_image), nil
 }
 
 func (p *Playlist) HasPendingChanges() bool {
