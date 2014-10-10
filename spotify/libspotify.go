@@ -2678,17 +2678,24 @@ const (
 type Image struct {
 	session  *Session
 	sp_image *C.sp_image
-	wg       sync.WaitGroup
+
+	wg     sync.WaitGroup
+	loaded chan struct{}
 }
 
 func newImage(s *Session, sp_image *C.sp_image) *Image {
-	C.sp_image_add_ref(sp_image)
-	i := &Image{session: s, sp_image: sp_image}
-	runtime.SetFinalizer(i, (*Image).release)
-
-	i.wg.Add(1)
+	i := &Image{
+		session:  s,
+		sp_image: sp_image,
+		loaded:   make(chan struct{}, 1),
+	}
+	if i.isLoaded() {
+		i.loaded <- struct{}{}
+	} else {
+		i.wg.Add(1)
+	}
 	C.set_image_callback(sp_image, unsafe.Pointer(i))
-
+	runtime.SetFinalizer(i, (*Image).release)
 	return i
 }
 
@@ -2696,22 +2703,20 @@ func (i *Image) release() {
 	if i.sp_image == nil {
 		panic("spotify: image object has no sp_image object")
 	}
-
 	C.sp_image_release(i.sp_image)
 	i.sp_image = nil
 }
 
 func (i *Image) cbComplete() {
-	if i.isLoaded() {
+	select {
+	case i.loaded <- struct{}{}:
 		i.wg.Done()
+	default:
 	}
 }
 
 func (i *Image) Wait() {
 	i.wg.Wait()
-	if !i.isLoaded() {
-		panic("spotify: image is not loaded")
-	}
 }
 
 func (i *Image) isLoaded() bool {
