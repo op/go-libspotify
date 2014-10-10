@@ -1600,7 +1600,7 @@ func (l *Link) Image() (*Image, error) {
 		return nil, errors.New("spotify: link is not for an image")
 	}
 	sp_image := C.sp_image_create_from_link(l.session.sp_session, l.sp_link)
-	if sp_image != nil {
+	if sp_image == nil {
 		return nil, errors.New("spotify: failed to create image from link")
 	}
 	return newImage(l.session, sp_image), nil
