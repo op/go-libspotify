@@ -1255,6 +1255,12 @@ func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.
 	t.cbComplete()
 }
 
+//export go_albumbrowse_complete
+func go_albumbrowse_complete(sp_albumbrowse unsafe.Pointer, userdata unsafe.Pointer) {
+	a := (*AlbumBrowse)(userdata)
+	a.cbComplete()
+}
+
 //export go_image_complete
 func go_image_complete(spImage unsafe.Pointer, userdata unsafe.Pointer) {
 	i := (*Image)(userdata)
@@ -2087,6 +2093,82 @@ func (a *Album) Type() AlbumType {
 
 func (a *Album) isLoaded() bool {
 	return C.sp_album_is_loaded(a.sp_album) == 1
+}
+
+type AlbumBrowse struct {
+	session        *Session
+	sp_albumbrowse *C.sp_albumbrowse
+	wg             sync.WaitGroup
+}
+
+func (s *Session) AlbumBrowse(a *Album) *AlbumBrowse {
+	ab := &AlbumBrowse{session: s}
+	ab.wg.Add(1)
+	C.albumbrowse_create(
+		ab.session.sp_session,
+		a.sp_album,
+		unsafe.Pointer(ab),
+	)
+	runtime.SetFinalizer(ab, (*AlbumBrowse).release)
+	return ab
+}
+
+func (a *AlbumBrowse) cbComplete() {
+	println("albumbrowse done", a)
+	a.wg.Done()
+}
+
+func (a *AlbumBrowse) release() {
+	if a.sp_albumbrowse == nil {
+		panic("spotify: AlbumBrowse object has no sp_albumbrowse object")
+	}
+	C.sp_albumbrowse_release(a.sp_albumbrowse)
+	a.sp_albumbrowse = nil
+}
+
+func (a *AlbumBrowse) Wait() {
+	println("waiting for albumbrowse", a)
+	a.wg.Wait()
+}
+
+func (a *AlbumBrowse) Error() error {
+	return spError(C.sp_albumbrowse_error(a.sp_albumbrowse))
+}
+
+func (a *AlbumBrowse) Album() *Album {
+	return newAlbum(a.session, C.sp_albumbrowse_album(a.sp_albumbrowse))
+}
+
+func (a *AlbumBrowse) Artist() *Artist {
+	return newArtist(a.session, C.sp_albumbrowse_artist(a.sp_albumbrowse))
+}
+
+func (a *AlbumBrowse) Copyrights() int {
+	return int(C.sp_albumbrowse_num_copyrights(a.sp_albumbrowse))
+}
+
+func (a *AlbumBrowse) Copyright(n int) string {
+	if n < 0 || n > a.Copyrights() {
+		panic("spotify: albumbrowse copyright out of range")
+	}
+
+	return C.GoString(C.sp_albumbrowse_copyright(a.sp_albumbrowse, C.int(n)))
+}
+
+func (a *AlbumBrowse) Tracks() int {
+	return int(C.sp_albumbrowse_num_tracks(a.sp_albumbrowse))
+}
+
+func (a *AlbumBrowse) Track(n int) *Track {
+	if n < 0 || n > a.Tracks() {
+		panic("spotify: albumbrowse track out of range")
+	}
+	sp_track := C.sp_albumbrowse_track(a.sp_albumbrowse, C.int(n))
+	return newTrack(a.session, sp_track)
+}
+
+func (a *AlbumBrowse) Review() string {
+	return C.GoString(C.sp_albumbrowse_review(a.sp_albumbrowse))
 }
 
 type Artist struct {
