@@ -1762,6 +1762,10 @@ type Track struct {
 	session  *Session
 	sp_track *C.sp_track
 	wg       sync.WaitGroup
+
+	// sometimes when loading a track the callback metadata_updated is called twice
+	// as there is a WaitGroup to control the Wait method it can't call WaitGroup.Done twice.
+	loadOnce sync.Once
 }
 
 func newTrack(s *Session, t *C.sp_track) *Track {
@@ -1785,7 +1789,7 @@ func (t *Track) release() {
 
 func (t *Track) cbUpdated() {
 	if t.isLoaded() {
-		t.wg.Done()
+		t.loadOnce.Do(func() { t.wg.Done() })
 	}
 }
 
