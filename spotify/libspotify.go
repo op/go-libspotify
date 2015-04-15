@@ -878,7 +878,7 @@ func (s *Session) processEvents() {
 		rc := C.sp_session_process_events(s.sp_session, &nextTimeoutMs)
 		s.mu.Unlock()
 		if err := spError(rc); err != nil {
-			println("process error err", err)
+			s.log(LogDebug, "process error err "+err.Error())
 			continue
 		}
 
@@ -964,7 +964,7 @@ func (s *Session) cbLoggedIn(err error) {
 	select {
 	case s.loggedIn <- err:
 	default:
-		println("failed to send logged in event")
+		s.log(LogDebug, "failed to send logged in event")
 	}
 }
 
@@ -972,7 +972,7 @@ func (s *Session) cbLoggedOut() {
 	select {
 	case s.loggedOut <- struct{}{}:
 	default:
-		println("failed to send logged out event")
+		s.log(LogDebug, "failed to send logged out event")
 	}
 }
 
@@ -998,7 +998,7 @@ func (s *Session) cbNotifyMainThread() {
 	select {
 	case s.notifyMainThread <- struct{}{}:
 	default:
-		println("failed to notify main thread")
+		s.log(LogDebug, "failed to notify main thread")
 		// TODO generate (internal) log message
 	}
 }
@@ -1045,15 +1045,15 @@ func (s *Session) cbUserInfoUpdated() {
 }
 
 func (s *Session) cbStartPlayback() {
-	println("start playback")
+	s.log(LogDebug, "start playback")
 }
 
 func (s *Session) cbStopPlayback() {
-	println("stop playback")
+	s.log(LogDebug, "stop playback")
 }
 
 func (s *Session) cbGetAudioBufferStats() {
-	println("get audio buffer stats")
+	s.log(LogDebug, "get audio buffer stats")
 }
 
 func (s *Session) cbOfflineStatusUpdated() {
@@ -1423,7 +1423,7 @@ func (pc *PlaylistContainer) Wait() {
 }
 
 func (pc *PlaylistContainer) cbLoaded() {
-	println("playlist container loaded")
+	pc.session.log(LogDebug, "playlist container loaded")
 	select {
 	case pc.loaded <- struct{}{}:
 		pc.wg.Done()
@@ -1432,13 +1432,13 @@ func (pc *PlaylistContainer) cbLoaded() {
 
 //export go_playlistcontainer_playlist_added
 func go_playlistcontainer_playlist_added(sp_playlistcontainer unsafe.Pointer, sp_playlist unsafe.Pointer, position C.int, userdata unsafe.Pointer) {
-	println("playlist container playlist added")
+	(*PlaylistContainer)(userdata).session.log(LogDebug, "playlist container playlist added")
 }
 
 //export go_playlistcontainer_loaded
 func go_playlistcontainer_loaded(sp_playlistcontainer unsafe.Pointer, userdata unsafe.Pointer) {
 	// playlistContainerCall(spSession, (*PlaylistContainer).cbLoaded)
-	println("playlistcontainer loaded")
+	(*PlaylistContainer)(userdata).session.log(LogDebug, "playlistcontainer loaded")
 	(*PlaylistContainer)(userdata).cbLoaded()
 }
 
@@ -2577,12 +2577,12 @@ func (t *toplist) release() {
 }
 
 func (t *toplist) cbComplete() {
-	println("toplist done", t)
+	t.session.log(LogDebug, "toplist done")
 	t.wg.Done()
 }
 
 func (t *toplist) Wait() {
-	println("waiting for toplist", t)
+	t.session.log(LogDebug, "waiting for toplist")
 	t.wg.Wait()
 }
 
