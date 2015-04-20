@@ -1255,6 +1255,12 @@ func go_toplistbrowse_complete(sp_toplistsearch unsafe.Pointer, userdata unsafe.
 	t.cbComplete()
 }
 
+//export go_albumbrowse_complete
+func go_albumbrowse_complete(sp_albumbrowse unsafe.Pointer, userdata unsafe.Pointer) {
+	a := (*Album)(userdata)
+	a.cbAlbumbrowseComplete()
+}
+
 //export go_image_complete
 func go_image_complete(spImage unsafe.Pointer, userdata unsafe.Pointer) {
 	i := (*Image)(userdata)
@@ -1569,7 +1575,9 @@ func (l *Link) Album() (*Album, error) {
 	if l.Type() != LinkTypeAlbum {
 		return nil, errors.New("spotify: link is not an album")
 	}
-	return newAlbum(l.session, C.sp_link_as_album(l.sp_link)), nil
+
+	album := newAlbum(l.session, C.sp_link_as_album(l.sp_link))
+	return album, nil
 }
 
 func (l *Link) Artist() (*Artist, error) {
@@ -1985,9 +1993,10 @@ const (
 )
 
 type Album struct {
-	session  *Session
-	sp_album *C.sp_album
-	wg       sync.WaitGroup
+	session        *Session
+	sp_album       *C.sp_album
+	wg             sync.WaitGroup
+	sp_albumbrowse *C.sp_albumbrowse
 }
 
 type AlbumType C.sp_albumtype
@@ -2011,6 +2020,11 @@ func newAlbum(s *Session, sp_album *C.sp_album) *Album {
 	if s.listenForMetadataUpdates(album.isLoaded, album) {
 		album.wg.Add(1)
 	}
+
+	album.wg.Add(1)
+	album.sp_albumbrowse = C.albumbrowse_create(s.sp_session, sp_album, unsafe.Pointer(album))
+	C.sp_albumbrowse_add_ref(album.sp_albumbrowse)
+
 	return album
 }
 
@@ -2018,6 +2032,10 @@ func (a *Album) release() {
 	if a.sp_album == nil {
 		panic("spotify: album object has no sp_album object")
 	}
+
+	C.sp_albumbrowse_release(a.sp_albumbrowse)
+	a.sp_albumbrowse = nil
+
 	C.sp_album_release(a.sp_album)
 	a.sp_album = nil
 }
@@ -2026,6 +2044,10 @@ func (a *Album) cbUpdated() {
 	if a.isLoaded() {
 		a.wg.Done()
 	}
+}
+
+func (a *Album) cbAlbumbrowseComplete() {
+	a.wg.Done()
 }
 
 func (a *Album) Wait() {
@@ -2091,6 +2113,44 @@ func (a *Album) Type() AlbumType {
 
 func (a *Album) isLoaded() bool {
 	return C.sp_album_is_loaded(a.sp_album) == 1
+}
+
+// Error checks if browsing returned an error code.
+func (a *Album) Error() error {
+	return spError(C.sp_albumbrowse_error(a.sp_albumbrowse))
+}
+
+// Copyrights returns the number of copyright strings.
+func (a *Album) Copyrights() int {
+	return int(C.sp_albumbrowse_num_copyrights(a.sp_albumbrowse))
+}
+
+// Copyright returns a copyright string for index n.
+func (a *Album) Copyright(n int) string {
+	if n < 0 || n > a.Copyrights() {
+		panic("spotify: albumbrowse copyright out of range")
+	}
+
+	return C.GoString(C.sp_albumbrowse_copyright(a.sp_albumbrowse, C.int(n)))
+}
+
+// Tracks returns the number of tracks.
+func (a *Album) Tracks() int {
+	return int(C.sp_albumbrowse_num_tracks(a.sp_albumbrowse))
+}
+
+// Track returns a track for index n.
+func (a *Album) Track(n int) *Track {
+	if n < 0 || n > a.Tracks() {
+		panic("spotify: albumbrowse track out of range")
+	}
+	sp_track := C.sp_albumbrowse_track(a.sp_albumbrowse, C.int(n))
+	return newTrack(a.session, sp_track)
+}
+
+// Review returns an album review.
+func (a *Album) Review() string {
+	return C.GoString(C.sp_albumbrowse_review(a.sp_albumbrowse))
 }
 
 type Artist struct {

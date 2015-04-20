@@ -176,6 +176,17 @@ void SP_CALLCONV cb_toplistbrowse_complete(sp_toplistbrowse *toplist, void *user
 	go_toplistbrowse_complete(toplist, userdata);
 }
 
+sp_albumbrowse* albumbrowse_create(sp_session *session, sp_album *album, void *userdata)
+{
+	return sp_albumbrowse_create(
+			session, album, cb_albumbrowse_complete, userdata);
+}
+
+void SP_CALLCONV cb_albumbrowse_complete(sp_albumbrowse *result, void *userdata)
+{
+	go_albumbrowse_complete(result, userdata);
+}
+
 void set_playlistcontainer_callbacks(sp_playlistcontainer_callbacks *callbacks)
 {
 	callbacks->playlist_added = cb_playlistcontainer_playlist_added;
